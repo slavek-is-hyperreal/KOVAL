@@ -29,22 +29,22 @@ WORKDIR /koval
 
 # Copy release compiled binaries from builder stage
 COPY --from=builder /koval-build/target/release/server /koval/server
-COPY --from=builder /koval-build/target/release/probe /koval/probe
 
 # Create dedicated persistent storage directories for Koval
-RUN mkdir -p /koval/db /koval/artifacts /koval/repos
+RUN mkdir -p /koval/db /koval/artifacts
 
 # Configure environmental variables pointing to persistent paths
 ENV KOVAL_DB=/koval/db/koval.db
 ENV KOVAL_ARTIFACTS_DIR=/koval/artifacts
-ENV KOVAL_REPOS_DIR=/koval/repos
+ENV KOVAL_QUEUE_CAPACITY=10
+ENV KOVAL_RATE_LIMIT=20
 ENV KOVAL_PORT=8731
 
 # Expose Koval Server's listening port
 EXPOSE 8731
 
 # Define persistent volume mount points for operational safety
-VOLUME ["/koval/db", "/koval/artifacts", "/koval/repos"]
+VOLUME ["/koval/db", "/koval/artifacts"]
 
 # Set binary execution entrypoint
 ENTRYPOINT ["/koval/server"]

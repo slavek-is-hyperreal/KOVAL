@@ -24,6 +24,10 @@ pub fn collect() -> GpuProfile {
                 if let Ok(phys_devs) = instance.enumerate_physical_devices() {
                     for (i, &phys_dev) in phys_devs.iter().enumerate() {
                         let props = instance.get_physical_device_properties(phys_dev);
+                        if props.device_type == vk::PhysicalDeviceType::CPU {
+                            continue;
+                        }
+
                         let name = CStr::from_ptr(props.device_name.as_ptr())
                             .to_string_lossy()
                             .into_owned();

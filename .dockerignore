@@ -1,0 +1,6 @@
+target/
+.git/
+artifacts/
+repos/
+*.db
+*.txt

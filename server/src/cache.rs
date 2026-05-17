@@ -2,7 +2,10 @@ use sha2::{Digest, Sha256};
 
 /// Computes the unique cache key for a build request based on hardware, project, git reference, and binary target.
 pub fn compute_cache_key(hardware_json: &str, project: &str, git_ref: &str, binary: Option<&str>) -> String {
-    let binary_str = binary.unwrap_or("");
+    let binary_str = match binary {
+        Some(b) => format!("some:{}", b),
+        None => "none".to_string(),
+    };
     let concatenated = format!("{}|{}|{}|{}", hardware_json, project, git_ref, binary_str);
     
     let mut hasher = Sha256::new();
@@ -49,5 +52,6 @@ mod tests {
         
         assert_ne!(key_none, key_server);
         assert_ne!(key_empty, key_server);
+        assert_ne!(key_none, key_empty);
     }
 }

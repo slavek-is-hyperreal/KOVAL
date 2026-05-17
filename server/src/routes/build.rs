@@ -90,7 +90,7 @@ pub async fn build_handler(
         binary: payload.binary.clone(),
     };
 
-    // 4. Save job state in database
+    // 5. Save job state in database
     {
         let conn = state.conn.lock().unwrap();
         if let Err(e) = db::insert_job(
@@ -106,7 +106,7 @@ pub async fn build_handler(
         }
     }
 
-    // 5. Enqueue job (applies immediate backpressure if full)
+    // 6. Enqueue job (applies immediate backpressure if full)
     match state.queue.enqueue(job) {
         Ok(id) => {
             let response_body = serde_json::json!({ "id": id });

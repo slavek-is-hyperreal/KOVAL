@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   koval-server:
     build:
@@ -7,11 +5,10 @@ services:
       dockerfile: Dockerfile
     container_name: koval-production-server
     ports:
-      - "8731:8731"
+      - "127.0.0.1:8731:8731"
     volumes:
       - koval-db:/koval/db
       - koval-artifacts:/koval/artifacts
-      - koval-repos:/koval/repos
     restart: unless-stopped
     environment:
       - RUST_LOG=info
@@ -20,6 +17,4 @@ volumes:
   koval-db:
     driver: local
   koval-artifacts:
-    driver: local
-  koval-repos:
     driver: local

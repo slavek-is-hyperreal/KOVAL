@@ -6,7 +6,10 @@ use std::alloc::{alloc, dealloc, Layout};
 use schema::StorageProfile;
 
 pub fn collect() -> StorageProfile {
-    let io_uring = fs::metadata("/sys/module/io_uring").is_ok();
+    let io_uring = fs::metadata("/sys/module/io_uring").is_ok()
+        || fs::read_to_string("/proc/sys/kernel/io_uring_disabled")
+            .map(|s| s.trim() == "0")
+            .unwrap_or(false);
     let o_direct = test_o_direct_support();
     let (read_speed_mbs, write_speed_mbs) = run_disk_benchmark(o_direct);
 
