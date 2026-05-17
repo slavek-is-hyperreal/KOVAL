@@ -179,3 +179,308 @@ curl -X GET http://localhost:8080/build/7f18b456-c392-4911-897b-928efad984d8/bin
 # 2. Check sha256 checksum on Linux
 sha256sum /tmp/output.tar.gz
 ```
+
+---
+
+### 4. Webhook Management
+
+Manage webhook notification channels. When build jobs complete (status transitions to `"done"` or `"failed"`), the server POSTs a signed, secure JSON payload to the registered targets.
+
+#### A. Register a Webhook URL
+`POST /webhooks`
+
+Registers a new webhook endpoint with a shared HMAC secret.
+
+##### Request Headers
+- `Authorization: Bearer <token>` (Required)
+- `Content-Type: application/json` (Required)
+
+##### Request Schema (JSON)
+- **url** (String, Required): Fully qualified webhook destination HTTP/HTTPS URL.
+- **secret** (String, Required): Secret string used for signing payload deliveries.
+
+##### Response Schema
+- **201 Created**: Webhook successfully registered.
+  ```json
+  {
+    "id": 1
+  }
+  ```
+- **401 Unauthorized**: Missing or invalid authentication token.
+
+##### Example Command
+```bash
+curl -X POST http://localhost:8080/webhooks \
+  -H "Authorization: Bearer koval_tkn_default_admin" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://ci.example.com/hooks/koval",
+    "secret": "my_webhook_secret_key_123"
+  }'
+```
+
+---
+
+#### B. List Active Webhooks
+`GET /webhooks`
+
+Returns an array of registered webhooks associated with the authenticated Bearer token.
+
+##### Request Headers
+- `Authorization: Bearer <token>` (Required)
+
+##### Response Schema
+- **200 OK**: Active webhooks retrieved. Returns a JSON array of objects:
+  - **id** (Integer): Unique ID of the webhook.
+  - **url** (String): Webhook destination URL.
+  - **created_at** (String): ISO 8601 creation timestamp.
+  - **is_active** (Boolean): Deactivation flag state.
+  ```json
+  [
+    {
+      "id": 1,
+      "url": "https://ci.example.com/hooks/koval",
+      "created_at": "2026-05-17T18:00:00Z",
+      "is_active": true
+    }
+  ]
+  ```
+
+##### Example Command
+```bash
+curl -X GET http://localhost:8080/webhooks \
+  -H "Authorization: Bearer koval_tkn_default_admin"
+```
+
+---
+
+#### C. Deactivate a Webhook
+`DELETE /webhooks/{id}`
+
+Deactivates and disables a registered webhook by its identifier.
+
+##### Request Headers
+- `Authorization: Bearer <token>` (Required)
+
+##### Path Parameters
+- **id** (Integer, Required): The unique ID of the target webhook.
+
+##### Response Schema
+- **204 No Content**: Webhook successfully deactivated.
+- **401 Unauthorized**: Missing or invalid authorization token.
+- **404 Not Found**: No active webhook matches the provided ID, or the webhook belongs to a different token. *Note: The API returns `404 Not Found` rather than `403 Forbidden` to prevent potential webhook presence discovery leaks.*
+
+##### Example Command
+```bash
+curl -X DELETE http://localhost:8080/webhooks/1 \
+  -H "Authorization: Bearer koval_tkn_default_admin"
+```
+
+---
+
+#### Webhook Delivery Specification
+
+Whenever a job transitions to `"done"` or `"failed"`, the orchestrator schedules asynchronous HTTP POST deliveries:
+
+##### Delivery Payload (`WebhookPayload`)
+* **job_id** (String): Unique build job UUID.
+* **status** (String): The final execution state (`"done"` or `"failed"`).
+* **finished_at** (String or Null): ISO 8601 completion timestamp.
+* **project** (String): Git repository build URL.
+* **sha256** (String or Null): Compilation archive SHA-256 hash (only populated when status is `"done"`).
+
+```json
+{
+  "job_id": "7f18b456-c392-4911-897b-928efad984d8",
+  "status": "done",
+  "finished_at": "2026-05-17T18:05:00Z",
+  "project": "https://github.com/example/project.git",
+  "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}
+```
+
+##### Security Signature Header
+Every webhook delivery includes the custom signature header `X-Koval-Signature`. The value is computed as:
+`X-Koval-Signature: sha256=<hmac>`
+where `<hmac>` is the hexadecimal HMAC-SHA256 signature of the raw JSON body payload signed using the registered webhook `secret`.
+
+##### Delivery Retry Policy
+If the destination server fails to respond (or returns a status outside the `2xx` range), the orchestrator retries transmission with the following retry pattern:
+* **Attempt 1**: Immediate delivery attempt.
+* **Attempt 2**: Retried after a **2-second** backoff sleep.
+* **Attempt 3**: Retried after a **5-second** backoff sleep.
+* After 3 failed attempts, the notification is abandoned.
+
+---
+
+### 5. Token Management
+
+Administrative endpoints to manage access tokens for target compilation environments.
+
+> [!IMPORTANT]
+> **Administrative Restrictions:** 
+> These endpoints are restricted strictly to personal-use deployments. Plaintext authentication matches must correspond directly to the bootstrapped default administrator token (`koval_tkn_default_admin`). Tokens generated via the API cannot act as administrative roots.
+
+#### A. Create a Bearer Token
+`POST /tokens`
+
+Generates and registers a new active client Bearer token.
+
+##### Request Headers
+- `Authorization: Bearer koval_tkn_default_admin` (Required)
+- `Content-Type: application/json` (Required)
+
+##### Request Schema (JSON)
+- **name** (String, Required): Name/identifier for the token (e.g. `"prod-build-box-1"`).
+
+##### Response Schema
+- **201 Created**: Token created successfully.
+  - **id** (Integer): Database row identifier.
+  - **plaintext_token** (String): **Plaintext string displayed ONCE. It is stored in hashed format (bcrypt) and cannot be recovered if lost.**
+  - **name** (String): Saved token identifier label.
+  ```json
+  {
+    "id": 2,
+    "plaintext_token": "8b7e2840-79ff-4bc0-b0b9-38f382a884fa",
+    "name": "prod-build-box-1"
+  }
+  ```
+- **401 Unauthorized**: Missing or invalid authentication token.
+- **403 Forbidden**: Access denied — Administrator privileges required.
+
+##### Example Command
+```bash
+curl -X POST http://localhost:8080/tokens \
+  -H "Authorization: Bearer koval_tkn_default_admin" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "prod-build-box-1"
+  }'
+```
+
+---
+
+#### B. List Registered Tokens
+`GET /tokens`
+
+Lists all registered active tokens in the system.
+
+##### Request Headers
+- `Authorization: Bearer koval_tkn_default_admin` (Required)
+
+##### Response Schema
+- **200 OK**: Active tokens retrieved. Returns a JSON array of objects:
+  - **id** (Integer): Token ID.
+  - **name** (String): Token identifier label.
+  - **created_at** (String): ISO 8601 registration timestamp.
+  ```json
+  [
+    {
+      "id": 1,
+      "name": "default-admin",
+      "created_at": "2026-05-17T18:00:00Z"
+    },
+    {
+      "id": 2,
+      "name": "prod-build-box-1",
+      "created_at": "2026-05-17T18:05:00Z"
+    }
+  ]
+  ```
+
+##### Example Command
+```bash
+curl -X GET http://localhost:8080/tokens \
+  -H "Authorization: Bearer koval_tkn_default_admin"
+```
+
+---
+
+#### C. Revoke a Bearer Token
+`DELETE /tokens/{id}`
+
+Revokes/deactivates a registered Bearer token by its ID.
+
+##### Request Headers
+- `Authorization: Bearer koval_tkn_default_admin` (Required)
+
+##### Path Parameters
+- **id** (Integer, Required): The unique ID of the target token to revoke.
+
+##### Response Schema
+- **204 No Content**: Token successfully revoked.
+- **401 Unauthorized**: Missing or invalid authentication token.
+- **403 Forbidden**: Access denied — Administrator privileges required.
+
+##### Example Command
+```bash
+curl -X DELETE http://localhost:8080/tokens/2 \
+  -H "Authorization: Bearer koval_tkn_default_admin"
+```
+
+---
+
+### 6. Job Listing
+
+Query compilation histories.
+
+#### List Recent Compilation Jobs
+`GET /jobs`
+
+Retrieves the history of the last 50 build jobs submitted by or visible to the authenticated Bearer token.
+
+##### Request Headers
+- `Authorization: Bearer <token>` (Required)
+
+##### Response Schema
+- **200 OK**: List of compilation summaries successfully retrieved. Returns a JSON array of objects:
+  - **id** (String): Unique job UUID.
+  - **project** (String): Project repository URL.
+  - **git_ref** (String): Target branch/tag/hash.
+  - **status** (String): Compilation state (one of `"queued"`, `"building"`, `"done"`, `"failed"`).
+  - **queued_at** (String): ISO 8601 submission timestamp.
+  - **started_at** (String or Null): ISO 8601 start timestamp.
+  - **finished_at** (String or Null): ISO 8601 completion timestamp.
+  ```json
+  [
+    {
+      "id": "7f18b456-c392-4911-897b-928efad984d8",
+      "project": "https://github.com/example/project.git",
+      "git_ref": "main",
+      "status": "done",
+      "queued_at": "2026-05-17T18:00:00Z",
+      "started_at": "2026-05-17T18:00:05Z",
+      "finished_at": "2026-05-17T18:05:00Z"
+    }
+  ]
+  ```
+
+##### Example Command
+```bash
+curl -X GET http://localhost:8080/jobs \
+  -H "Authorization: Bearer koval_tkn_default_admin"
+```
+
+---
+
+### 7. Web UI Dashboard
+
+Serves a premium, responsive Web UI dashboard directly from the Axum orchestrator.
+
+#### Serve Web Dashboard Page
+`GET /ui`
+
+Serves the standalone HTML/JS single-page application dashboard interface.
+
+##### Request Headers
+*No authentication headers required to load the static interface.*
+
+##### Security Configuration
+Authentication details (the user's Bearer token) are keyed securely via standard browser fields, stored only inside `sessionStorage` in the client's memory space, and injected as an `Authorization` header dynamically during internal REST fetch requests.
+
+##### Example Command
+```bash
+# Serves application index HTML to browser clients
+curl -X GET http://localhost:8080/ui
+```
+```

@@ -10,9 +10,10 @@ Welcome, developer! This guide provides everything you need to set up, test, deb
 
 Koval is structured as a multi-package Cargo workspace. Here are the core development targets:
 
-* **[schema](file:///my_data/KOVAL/schema/src/lib.rs)**: Logicless, shared data contract crate.
-* **[probe](file:///my_data/KOVAL/probe/src/main.rs)**: Lightweight targets diagnostic agent.
-* **[server](file:///my_data/KOVAL/server/src/main.rs)**: Axum-based HTTP build manager, SQLite manager, and queue processor.
+* **schema** (`schema/src/lib.rs`): Logicless, shared data contract crate.
+* **probe** (`probe/src/main.rs`): Lightweight targets diagnostic agent.
+* **server** (`server/src/main.rs`): Axum-based HTTP build manager, SQLite manager, and queue processor.
+* **cli** (`cli/src/main.rs`): koval CLI — token, webhook, and job management.
 
 ---
 
@@ -25,7 +26,7 @@ All workspace unit and integration test blocks compile and execute inside an iso
 docker compose -f docker-compose.test.yml up --build --abort-on-container-exit
 ```
 
-If all 9 tests pass, your environment is ready.
+If all tests pass, your environment is ready.
 
 ### Starting a Local Koval Server Sandbox
 To test the Axum orchestrator server locally, configure the proper `KOVAL_*` environment variables and start the server package:
@@ -58,7 +59,7 @@ Keep this token handy; you will use it to authorize curl API commands.
 This tutorial demonstrates how to add a new hardware property — `hyperthreading` detection — to the probe collector and propagate it to the orchestrator.
 
 ### Step 1: Add Fields to the Shared Crate
-Open [schema/src/lib.rs](file:///my_data/KOVAL/schema/src/lib.rs) and update the `CpuProfile` structure to include the new boolean field:
+Open `schema/src/lib.rs` and update the `CpuProfile` structure to include the new boolean field:
 
 ```rust
 // schema/src/lib.rs
@@ -103,7 +104,7 @@ pub fn collect() -> CpuProfile {
 ### Step 3: Extend Optimization Conditions in Server Forge
 Now that the server receives this new hardware parameter inside the JSON `HardwareProfile` payload, you can add a rules compiler matching condition.
 
-Open [server/src/forge.rs](file:///my_data/KOVAL/server/src/forge.rs) and add the field to `ForgeRule`:
+Open `server/src/forge.rs` and add the field to `ForgeRule`:
 
 ```rust
 // server/src/forge.rs
@@ -163,3 +164,42 @@ sqlite3 koval.db
   INSERT INTO tokens (token_hash, name, created_at, is_active) 
   VALUES ('$2b$04$CgYgqKq.3yB6dF23U7PXeugO06Y.442lZsc7kY7XyF1.mZkG4/qae', 'My Key', '2026-05-17T17:53:00Z', 1);
   ```
+
+---
+
+## 5. Using the koval CLI
+
+The `koval` command-line tool provides a quick interface to configure access, monitor jobs, manage webhooks, and administer credentials.
+
+### Configuration (One-Time Setup)
+
+By default, the CLI reads and writes its settings in `~/.config/koval/config.json`. Configure the CLI tool with your Koval build server details:
+
+```bash
+# Set the server location
+koval config set-server http://localhost:8080
+
+# Authenticate using your Bearer token
+koval config set-token koval_tkn_default_admin
+
+# Verify the configured settings
+koval config show
+```
+
+### Supported Subcommand Reference
+
+* **config**: Settings administration.
+  * `set-server <url>` — Save the target Koval server base URL.
+  * `set-token <token>` — Save the Bearer authentication token.
+  * `show` — Display current configuration paths and server settings.
+* **token**: Administrative token credentials. *Note: Requires default admin privileges.*
+  * `create --name <name>` — Create a new developer Bearer token.
+  * `list` — List all registered active tokens.
+  * `delete <id>` — Revoke and deactivate a token by ID.
+* **job**: Tracking and histories.
+  * `list` — List last 50 jobs for the active authenticated token.
+  * `status <job_id>` — Inspect the detailed raw JSON status payload for a specific job.
+* **webhook**: Integration notifications.
+  * `create --url <url> --secret <secret>` — Register a new webhook target endpoint with HMAC signing secret.
+  * `list` — List registered webhooks for the active token.
+  * `delete <id>` — Revoke and deactivate a webhook endpoint by ID.

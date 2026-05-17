@@ -50,10 +50,11 @@ The diagram below shows how a build request flows from a target device running t
 
 ## Database Architecture
 
-Koval uses an embedded SQLite database (configured by `KOVAL_DB`) to manage state persistence. The server relies on two primary tables:
+Koval uses an embedded SQLite database (configured by `KOVAL_DB`) to manage state persistence. The server relies on three primary tables:
 
-1. **tokens**: Stores api tokens allowed to trigger builds. Instead of storing plain text tokens or fast hashes, the database stores standard salt-backed **bcrypt hashes**. It records the creation date, status (active/revoked), and ownership.
+1. **tokens**: Stores API Bearer tokens allowed to trigger compilation jobs. Instead of storing plain text tokens or fast hashes, the database stores standard salt-backed **bcrypt hashes**. It records the creation date, status (active/revoked), and ownership.
 2. **jobs**: Stores the complete record of every compilation request. This table stores the target project name, Git reference, the complete serialized target `HardwareProfile` JSON payload, current status (`queued`, `building`, `done`, `failed`), logs, and file system paths to the completed build archive.
+3. **webhooks**: Stores webhook receiver URLs and HMAC secrets mapped to active client tokens, alongside enabled/disabled state flags, used for secure notifications.
 
 ---
 
@@ -62,7 +63,7 @@ Koval uses an embedded SQLite database (configured by `KOVAL_DB`) to manage stat
 To ensure that heavy compilation jobs do not block web requests or starve server resources, Koval uses an asynchronous producer-consumer queue:
 
 - **Enqueueing**: When a valid `POST /build` is received, the job is registered in SQLite as `queued` and pushed into a thread-safe, bounded memory channel. If the queue is full, immediate backpressure is applied, and the client receives a `503 Service Unavailable` response.
-- **Worker Thread**: A dedicated, long-running worker loop pops jobs off the queue one by one. Upon popping a job, the worker updates its database status to `building`, clones and checks out the project branch, parses and evaluates `koval.toml` rules against the hardware profile, triggers `cargo build` with custom features and environment injections, packs the compiled binary into a `tar.gz` archive, calculates its SHA-256 signature, and transitions the database status to `done` (or `failed` upon error).
+- **Worker Thread**: A dedicated, long-running worker loop pops jobs off the queue one by one. Upon popping a job, the worker updates its database status to `building`, clones and checks out the project branch, parses and evaluates `koval.toml` rules against the hardware profile, triggers `cargo build` with custom features and environment injections, packs the compiled binary into a `tar.gz` archive, calculates its SHA-256 signature, and transitions the database status to `done` (or `failed` upon error). After transitioning status to `done` or `failed`, the worker reads active webhooks for the job's token from the database and triggers asynchronous HTTP delivery to each registered URL.
 
 ---
 

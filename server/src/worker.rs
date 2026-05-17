@@ -96,10 +96,13 @@ fn process_job(
         };
 
         if !webhooks.is_empty() {
-            let handle = tokio::runtime::Handle::current();
-            handle.spawn(async move {
-                crate::webhook::deliver(payload, webhooks).await;
-            });
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    crate::webhook::deliver(payload, webhooks).await;
+                });
+            } else {
+                eprintln!("Failed to get Tokio handle for webhook delivery");
+            }
         }
 
         Ok(())
@@ -262,10 +265,13 @@ fn process_job(
         };
 
         if !webhooks.is_empty() {
-            let handle = tokio::runtime::Handle::current();
-            handle.spawn(async move {
-                crate::webhook::deliver(payload, webhooks).await;
-            });
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    crate::webhook::deliver(payload, webhooks).await;
+                });
+            } else {
+                eprintln!("Failed to get Tokio handle for webhook delivery");
+            }
         }
     }
 

@@ -161,8 +161,12 @@ mod tests {
             sha256: None,
         };
 
-        // Call non-existent port to force immediate network failure or timeout
-        let url = "http://127.0.0.1:9999/webhook".to_string();
+        // Bind and immediately drop an ephemeral TCP listener to get a guaranteed closed, unoccupied port
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+
+        let url = format!("http://{}/webhook", addr);
         deliver(payload, vec![(url, "secret".to_string())]).await;
 
         // Let the spawn execute and fail silently

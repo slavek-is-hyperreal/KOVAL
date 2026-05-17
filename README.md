@@ -201,20 +201,29 @@ The Docker image ships with the Rust toolchain, all registered `rustup` targets,
 
 ## Token Management
 
-On first start, Koval prints a default admin token. From there:
+On first start, Koval prints a default admin token. Set up the configuration for the CLI client tool:
 
 ```bash
-# A token for a new device — shown once, store it
-koval-cli token add --name "old-laptop"
+# Configure the koval CLI with target server base URL
+koval config set-server http://localhost:8731
 
-# See what's active
-koval-cli token list
+# Authenticate using the bootstrapped admin token
+koval config set-token koval_tkn_default_admin
 
-# Revoke when a device is retired
-koval-cli token revoke --name "old-laptop"
+# Verify configuration details
+koval config show
+
+# Generate a new client Bearer token — shown once, store it safely!
+koval token create --name "old-laptop"
+
+# List all currently active tokens (Admin privilege required)
+koval token list
+
+# Revoke/deactivate a token when a device is retired
+koval token delete 1
 ```
 
-Tokens are stored as bcrypt hashes. Plaintext is shown once at creation and never again.
+Tokens are stored securely as bcrypt hashes in SQLite. Plaintext is displayed ONCE at creation and never stored.
 
 ---
 
@@ -224,7 +233,8 @@ Tokens are stored as bcrypt hashes. Plaintext is shown once at creation and neve
 koval/
 ├── probe/          ← runs on the target device, collects hardware profile
 ├── schema/         ← shared types between probe and server (no logic)
-└── server/         ← HTTP API, queue, worker, SQLite
+├── server/         ← HTTP API, queue, worker, SQLite
+└── cli/            ← koval command-line tool for token and webhook management
 ```
 
 ---
@@ -244,13 +254,10 @@ Not sure where to start? Pick the one that matches what you're trying to do:
 
 ## Status
 
-Early development. Probe and server API are the first milestones.
+Early development. Build server and agent pipelines are operational.
 
 **Not yet implemented:**
 - Build cache (same hardware profile + git ref → reuse existing artifact)
-- Webhook notifications on job completion
-- `koval-cli` token management tool
-- Web UI for job history
 
 ---
 
