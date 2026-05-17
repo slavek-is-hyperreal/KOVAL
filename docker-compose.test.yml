@@ -1,0 +1,10 @@
+services:
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    volumes:
+      - ./test-artifacts:/tmp/koval-artifacts
+    devices:
+      - /dev/dri/card1:/dev/dri/card0
+      - /dev/dri/renderD128:/dev/dri/renderD128
