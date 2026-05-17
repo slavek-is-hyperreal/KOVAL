@@ -18,7 +18,11 @@ fn print_row(cols: &[&str], widths: &[usize]) {
         row.push('|');
         row.push(' ');
         let val = if col.len() > widths[i] {
-            &col[..widths[i]]
+            let mut end = widths[i];
+            while !col.is_char_boundary(end) {
+                end -= 1;
+            }
+            &col[..end]
         } else {
             col
         };
@@ -130,3 +134,16 @@ pub fn print_webhooks(webhooks: &[WebhookRecord]) {
     }
     print_divider(&widths);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_print_row_multibyte_truncation_does_not_panic() {
+        let widths = [2];
+        let cols = ["héllo"];
+        print_row(&cols, &widths);
+    }
+}
+

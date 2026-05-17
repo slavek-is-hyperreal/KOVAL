@@ -7,4 +7,9 @@ env = { KOVAL_AVX2_ENABLED = "true" }
 
 [[rules]]
 min_cores = 4
-rustflags = ["-C", "opt-level=3"]
+env = { CARGO_BUILD_JOBS = "4" }
+
+[[rules]]
+require_io_uring = true
+features = ["io_uring"]
+

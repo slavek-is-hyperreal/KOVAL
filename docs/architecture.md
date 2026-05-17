@@ -32,14 +32,18 @@ The diagram below shows how a build request flows from a target device running t
           |                                       |       |
           |                                       |   3. Verify Auth Token (bcrypt verification)
           |                                       |   4. Apply sliding rate limits
-          |                                       |   5. Save Job as "queued" in SQLite
-          |                                       |   6. Push to Bounded Memory Queue
+          |                                       |   5. Compute cache key and check build cache
+          |                                       |       | [Cache Hit & File Exists]
+          |                                       |       +--> Skip build, immediately return 202 with cached job ID
+          |                                       |       | [Cache Miss / File Missing]
+          |                                       |   6. Save Job as "queued" in SQLite
+          |                                       |   7. Push to Bounded Memory Queue
           |                                       |       |
           |                                       | [Async Worker Loop]
-          |                                       |   7. Pop job from queue
-          |                                       |   8. Match koval.toml rules (forge.rs)
-          |                                       |   9. Run `cargo build` with targeted RUSTFLAGS & features
-          |                                       |  10. Update job status to "done"
+          |                                       |   8. Pop job from queue
+          |                                       |   9. Match koval.toml rules (forge.rs)
+          |                                       |  10. Run `cargo build` with targeted RUSTFLAGS & features
+          |                                       |  11. Save cache record & update status to "done"
           |                                       |       |
           | <--- GET /build/status -------------- | [Status Poll]
           |                                       |
@@ -50,11 +54,12 @@ The diagram below shows how a build request flows from a target device running t
 
 ## Database Architecture
 
-Koval uses an embedded SQLite database (configured by `KOVAL_DB`) to manage state persistence. The server relies on three primary tables:
+Koval uses an embedded SQLite database (configured by `KOVAL_DB`) to manage state persistence. The server relies on four primary tables:
 
 1. **tokens**: Stores API Bearer tokens allowed to trigger compilation jobs. Instead of storing plain text tokens or fast hashes, the database stores standard salt-backed **bcrypt hashes**. It records the creation date, status (active/revoked), and ownership.
 2. **jobs**: Stores the complete record of every compilation request. This table stores the target project name, Git reference, the complete serialized target `HardwareProfile` JSON payload, current status (`queued`, `building`, `done`, `failed`), logs, and file system paths to the completed build archive.
 3. **webhooks**: Stores webhook receiver URLs and HMAC secrets mapped to active client tokens, alongside enabled/disabled state flags, used for secure notifications.
+4. **build_cache**: Maps unique build cache keys (deterministic hashes of hardware profile, git repo, git ref, and target binary name) to their completed `job_id` and timestamp. Used to bypass compilation on exact build duplicate hits.
 
 ---
 

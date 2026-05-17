@@ -255,10 +255,11 @@ Not sure where to start? Pick the one that matches what you're trying to do:
 
 ## Status
 
-Early development. Build server and agent pipelines are operational.
+Early development. Build server, agent pipelines, build caching, and webhook event notifications are fully operational.
 
-**Not yet implemented:**
-- Build cache (same hardware profile + git ref → reuse existing artifact)
+**Core features implemented:**
+- **Build cache**: Remembers compiled output for the exact same hardware profile, Git ref, and binary target, and skips compilation if the compiled artifact still exists on disk.
+- **Webhook notifications**: Automatically sends a signed HMAC-SHA256 event notification to registered endpoints when a build transitions to `done` or `failed`.
 
 ---
 

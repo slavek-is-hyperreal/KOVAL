@@ -254,15 +254,25 @@ fn process_job(
                 }
 
                 // Compress workspace binaries using local tar utility
-                let mut tar_args = vec![
-                    "-czf",
-                    archive_path.to_str().ok_or("Invalid archive path")?,
-                    "-C",
-                    release_dir.to_str().ok_or("Invalid release dir path")?,
+                let archive_str = archive_path.to_str()
+                    .ok_or("Invalid archive path: non-UTF8")?
+                    .to_string();
+                let release_str = release_dir.to_str()
+                    .ok_or("Invalid release dir: non-UTF8")?
+                    .to_string();
+
+                let mut tar_args: Vec<String> = vec![
+                    "-czf".to_string(),
+                    archive_str,
+                    "-C".to_string(),
+                    release_str,
                 ];
                 for bin in &binaries {
-                    let file_name = bin.file_name().and_then(|s| s.to_str()).ok_or("Invalid binary name")?;
-                    tar_args.push(file_name);
+                    let name = bin.file_name()
+                        .and_then(|s| s.to_str())
+                        .ok_or("Invalid binary filename: non-UTF8")?
+                        .to_string();
+                    tar_args.push(name);
                 }
 
                 let tar_status = Command::new("tar")
@@ -314,16 +324,25 @@ fn process_job(
         let sha256_hash = format!("{:x}", sha_hasher.finalize());
         let file_size = archive_path.metadata()?.len();
 
-        // 9. Store artifact record and transition to done
+        // 9. Store artifact record, build cache entry, and transition to done
         let finished_str = Utc::now().to_rfc3339();
         let webhooks = {
             let conn = conn_mutex.lock().unwrap();
             db::get_webhooks_delivery_info(&conn, job.token_id).ok().unwrap_or_default()
         };
 
+        let hardware_json = serde_json::to_string(&job.hardware).unwrap_or_default();
+        let cache_key = crate::cache::compute_cache_key(
+            &hardware_json,
+            &job.project,
+            &job.git_ref,
+            job.binary.as_deref(),
+        );
+
         {
             let conn = conn_mutex.lock().unwrap();
             db::insert_artifact(&conn, &job.id, &archive_path.to_string_lossy(), file_size, &sha256_hash)?;
+            db::insert_cache_entry(&conn, &cache_key, &job.id, &finished_str)?;
             db::update_job_status(&conn, &job.id, "done", None, Some(&finished_str), None)?;
         }
 

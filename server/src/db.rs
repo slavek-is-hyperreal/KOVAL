@@ -72,6 +72,16 @@ pub fn init_db<P: AsRef<Path>>(path: P) -> Result<Connection, rusqlite::Error> {
         [],
     )?;
 
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS build_cache (
+            cache_key TEXT PRIMARY KEY,
+            job_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
+        );",
+        [],
+    )?;
+
     Ok(conn)
 }
 
@@ -425,6 +435,30 @@ pub fn get_recent_jobs(
     Ok(list)
 }
 
+// BUILD_CACHE QUERIES
+
+pub fn get_cache_entry(conn: &Connection, cache_key: &str) -> Result<Option<String>, rusqlite::Error> {
+    conn.query_row(
+        "SELECT job_id FROM build_cache WHERE cache_key = ?1",
+        params![cache_key],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+pub fn insert_cache_entry(
+    conn: &Connection,
+    cache_key: &str,
+    job_id: &str,
+    created_at: &str,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT OR REPLACE INTO build_cache (cache_key, job_id, created_at) VALUES (?1, ?2, ?3)",
+        params![cache_key, job_id, created_at],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -551,5 +585,32 @@ mod tests {
         assert_eq!(recent.len(), 2);
         assert_eq!(recent[0].id, "job-2"); // ordered descending by queued_at
         assert_eq!(recent[1].id, "job-1");
+    }
+
+    #[test]
+    fn test_db_build_cache() {
+        let conn = setup_mem_db();
+        let token_hash = "$2b$12$cachetoken".to_string();
+        let token_id = insert_token(&conn, &token_hash, "Cache Client", "2026-05-17T16:53:00Z").unwrap();
+
+        let hardware = HardwareProfile {
+            cpu: CpuProfile { flags: vec![], cache_topology: "".to_string(), core_count: 1 },
+            memory: MemoryProfile { total_bytes: 1024, available_bytes: 512, bandwidth_mbs: 100.0 },
+            storage: StorageProfile { io_uring: false, o_direct: false, read_speed_mbs: 10.0, write_speed_mbs: 10.0 },
+            gpu: GpuProfile { devices: vec![] },
+        };
+        let job_id = "job-uuid-cache";
+        insert_job(&conn, job_id, token_id, "project", "ref", &hardware, "2026-05-17T16:53:00Z").unwrap();
+
+        let cache_key = "my-awesome-cache-key-123";
+        let created_at = "2026-05-17T16:53:00Z";
+
+        let missing = get_cache_entry(&conn, cache_key).unwrap();
+        assert!(missing.is_none());
+
+        insert_cache_entry(&conn, cache_key, job_id, created_at).unwrap();
+
+        let found = get_cache_entry(&conn, cache_key).unwrap().expect("Cache entry should exist");
+        assert_eq!(found, job_id);
     }
 }

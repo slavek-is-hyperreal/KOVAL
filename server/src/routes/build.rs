@@ -45,7 +45,41 @@ pub async fn build_handler(
     // 2. Gather hardware profile using target probe binary (from target device payload)
     let hardware = payload.hardware.clone();
 
-    // 3. Create job entity
+    // 3. Build Cache Lookup
+    let hardware_json = serde_json::to_string(&hardware).unwrap_or_default();
+    let cache_key = crate::cache::compute_cache_key(
+        &hardware_json,
+        &payload.project,
+        &payload.git_ref,
+        payload.binary.as_deref(),
+    );
+
+    let mut cache_hit = false;
+    let mut cached_id = String::new();
+
+    {
+        let conn = state.conn.lock().unwrap();
+        if let Ok(Some(job_id)) = db::get_cache_entry(&conn, &cache_key) {
+            if let Ok(Some(job_status)) = db::get_job_status(&conn, &job_id) {
+                if job_status.status == "done" {
+                    if let Ok(Some((file_path, _, _))) = db::get_artifact(&conn, &job_id) {
+                        let path = std::path::Path::new(&file_path);
+                        if path.exists() {
+                            cache_hit = true;
+                            cached_id = job_id;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if cache_hit {
+        let response_body = serde_json::json!({ "id": cached_id });
+        return (StatusCode::ACCEPTED, Json(response_body)).into_response();
+    }
+
+    // 4. Create job entity
     let job_id = Uuid::new_v4().to_string();
     let job = Job {
         id: job_id.clone(),

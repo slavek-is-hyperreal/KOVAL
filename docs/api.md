@@ -19,6 +19,12 @@ Authorization: Bearer koval_tkn_default_admin
 To ensure fair resource sharing, the API enforces a sliding-window rate limit (typically 20 requests per 60 seconds per token, customizable by `KOVAL_RATE_LIMIT`). 
 - **Exceeding the limit**: If you exceed this threshold, the server immediately returns a `429 Too Many Requests` status.
 
+### Build Caching
+To optimize delivery and avoid redundant CPU resource consumption, Koval automatically caches successful build artifacts:
+- **Cache Key**: A deterministic SHA-256 hash computed from the target `hardware` profile, `project` git URL, `git_ref` revision, and optional `binary` target name.
+- **Cache Hit**: If a build request perfectly matches an existing cache key, the server checks the status of the cached job. If it is `done` and the physical `.tar.gz` archive is present on disk, the compilation is bypassed entirely and the server immediately returns `202 Accepted` along with the *cached* `job_id`.
+- **Cache Fallback**: If the cache check succeeds but the physical binary artifact was removed or deleted from the server's filesystem, Koval ignores the cache entry, queues a fresh compilation job, and registers the newly generated artifact upon completion.
+
 ---
 
 ## Endpoint Directory

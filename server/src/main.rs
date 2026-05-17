@@ -13,6 +13,7 @@ pub mod queue;
 pub mod routes;
 pub mod webhook;
 pub mod worker;
+pub mod cache;
 
 use crate::queue::JobQueue;
 use crate::routes::AppState;
@@ -336,5 +337,112 @@ mod tests {
 
         let res_status = app.oneshot(req_status).await.unwrap();
         assert_eq!(res_status.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_e2e_build_cache_behaviors() {
+        let (app, conn_mutex, _queue, _rx) = build_test_router();
+
+        // 1. Submit initial request
+        let payload = r#"{
+            "project": "https://github.com/example/cachetest",
+            "git_ref": "v1.1",
+            "hardware": {
+                "cpu": {"flags": ["avx2"], "cache_topology": "L1:32KB", "core_count": 4},
+                "memory": {"total_bytes": 8589934592, "available_bytes": 4294967296, "bandwidth_mbs": 12000.0},
+                "storage": {"io_uring": false, "o_direct": true, "read_speed_mbs": 450.0, "write_speed_mbs": 400.0},
+                "gpu": {"devices": []}
+            }
+        }"#;
+
+        let req1 = Request::builder()
+            .method("POST")
+            .uri("/build")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::from(payload))
+            .unwrap();
+
+        let res1 = app.clone().oneshot(req1).await.unwrap();
+        assert_eq!(res1.status(), StatusCode::ACCEPTED);
+
+        let body_bytes = axum::body::to_bytes(res1.into_body(), usize::MAX).await.unwrap();
+        let body_json: Value = serde_json::from_slice(&body_bytes).unwrap();
+        let job_id1 = body_json["id"].as_str().unwrap().to_string();
+
+        // Create the temp artifacts directory
+        let temp_dir = std::env::temp_dir().join("artifacts");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let dummy_archive = temp_dir.join(format!("{}.tar.gz", job_id1));
+        std::fs::write(&dummy_archive, b"dummy compiled binaries content").unwrap();
+
+        // Register done state and artifact in DB
+        {
+            let conn = conn_mutex.lock().unwrap();
+            db::update_job_status(&conn, &job_id1, "done", None, Some("2026-05-17T17:00:00Z"), None).unwrap();
+            db::insert_artifact(&conn, &job_id1, &dummy_archive.to_string_lossy(), 100, "dummysha").unwrap();
+
+            // Compute cache key and insert cache entry
+            let hardware = schema::HardwareProfile {
+                cpu: schema::CpuProfile {
+                    flags: vec!["avx2".to_string()],
+                    cache_topology: "L1:32KB".to_string(),
+                    core_count: 4,
+                },
+                memory: schema::MemoryProfile {
+                    total_bytes: 8589934592,
+                    available_bytes: 4294967296,
+                    bandwidth_mbs: 12000.0,
+                },
+                storage: schema::StorageProfile {
+                    io_uring: false,
+                    o_direct: true,
+                    read_speed_mbs: 450.0,
+                    write_speed_mbs: 400.0,
+                },
+                gpu: schema::GpuProfile { devices: vec![] },
+            };
+            let hw_str = serde_json::to_string(&hardware).unwrap();
+            let cache_key = crate::cache::compute_cache_key(&hw_str, "https://github.com/example/cachetest", "v1.1", None);
+            db::insert_cache_entry(&conn, &cache_key, &job_id1, "2026-05-17T17:00:00Z").unwrap();
+        }
+
+        // 2. Submit identical request -> must hit build cache!
+        let req2 = Request::builder()
+            .method("POST")
+            .uri("/build")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::from(payload))
+            .unwrap();
+
+        let res2 = app.clone().oneshot(req2).await.unwrap();
+        assert_eq!(res2.status(), StatusCode::ACCEPTED);
+
+        let body_bytes2 = axum::body::to_bytes(res2.into_body(), usize::MAX).await.unwrap();
+        let body_json2: Value = serde_json::from_slice(&body_bytes2).unwrap();
+        let job_id2 = body_json2["id"].as_str().unwrap().to_string();
+
+        assert_eq!(job_id1, job_id2); // CACHE HIT!
+
+        // 3. Remove physical archive -> must miss cache due to missing file fallback!
+        std::fs::remove_file(&dummy_archive).unwrap();
+
+        let req3 = Request::builder()
+            .method("POST")
+            .uri("/build")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::from(payload))
+            .unwrap();
+
+        let res3 = app.clone().oneshot(req3).await.unwrap();
+        assert_eq!(res3.status(), StatusCode::ACCEPTED);
+
+        let body_bytes3 = axum::body::to_bytes(res3.into_body(), usize::MAX).await.unwrap();
+        let body_json3: Value = serde_json::from_slice(&body_bytes3).unwrap();
+        let job_id3 = body_json3["id"].as_str().unwrap().to_string();
+
+        assert_ne!(job_id1, job_id3); // CACHE MISS (file deleted)!
     }
 }
