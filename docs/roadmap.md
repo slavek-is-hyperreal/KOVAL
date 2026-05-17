@@ -1,0 +1,161 @@
+# Koval Roadmap
+
+This is a living document. Priorities shift as the project grows and as people
+actually use it and report what matters. MIT license — everything here is open
+for contribution.
+
+---
+
+## What exists today
+
+The core loop works end-to-end:
+
+- **probe** — collects CPU flags, cache topology, memory bandwidth (measured),
+  storage stack (io_uring, O_DIRECT, SSD throughput), GPU via Vulkan/ash
+- **server** — HTTP API, bounded job queue, async worker, SQLite state,
+  bcrypt token auth, sliding-window rate limiting
+- **webhooks** — HMAC-signed POST delivery on job completion or failure
+- **token management** — create/list/revoke via API and CLI
+- **job history** — GET /jobs, browser UI at GET /ui
+- **koval CLI** — config, token, job, webhook subcommands
+
+What it cannot do yet is listed below.
+
+---
+
+## Next — things that should exist before calling this v1
+
+### Workspace and multi-binary support
+
+The single most important missing piece. Any project that is a Cargo workspace
+or produces more than one binary will fail with a cryptic error today.
+The fix adds `binary: Option<String>` to `JobRequest` and three build paths
+in `worker.rs`: workspace (auto-detect all executables), specific binary
+(`--bin <name>`), and the existing single-package path.
+
+After this lands, Koval can build Koval itself. That is the first real milestone.
+
+### Build cache
+
+Same hardware profile hash + same git ref = no recompilation, serve the
+existing artifact. The cache key is `sha256(hardware_json) + project + git_ref`.
+This is the single biggest usability improvement for people who run the same
+build repeatedly during development.
+
+### koval.toml for Koval itself
+
+Once workspace support exists, add `koval.toml` to this repository.
+Koval building itself with hardware-aware flags is the proof of concept
+that closes the loop.
+
+### Production Docker image
+
+A `Dockerfile` for the server (not just the test `Dockerfile.test`).
+Includes the Rust toolchain, configurable target architectures via
+`rustup target add`, and a documented `docker-compose.yml` for
+self-hosting.
+
+---
+
+## Medium term — things that expand what Koval can do
+
+### Cross-compilation
+
+Build for a different architecture than the build box.
+Probe collects the target's hardware profile. Server cross-compiles
+using the appropriate `--target` triple and `rustup target add`.
+Primary use case: build for ARM on an x86 build box.
+
+The tricky part is toolchain management — the server needs the right
+linker for each target. Probably solved with a configurable
+`[targets]` section in a server-side config.
+
+### GitHub Actions integration
+
+A `koval-action` that runs the probe in CI, submits the build to
+a self-hosted Koval server, and downloads the result. The probe
+would collect the runner's hardware profile, which is deterministic
+per runner type — so cached builds would hit reliably.
+
+### Richer probe measurements
+
+Current probe measures memory bandwidth with a simple copy benchmark.
+What would make it substantially more useful:
+
+- **Memory latency** — random-access latency matters more than bandwidth
+  for pointer-heavy workloads
+- **NUMA topology** — which cores share which memory controllers
+- **CPU frequency under load** — boost clocks affect the PAR_THRESHOLD
+  calculations in koval.toml rules
+- **Kernel version** — not just io_uring presence, but feature level
+
+### Incremental builds
+
+Clone the repo, check if `target/` from a previous build is available
+for this `git_ref`, use `--incremental`. Requires artifact storage to
+keep the `target/` directory between builds, not just the final binary.
+High complexity, high payoff for large projects.
+
+---
+
+## Long term — things that would make this something else entirely
+
+### C and C++ support
+
+Clang compiles to LLVM IR. The koval.toml rule engine is language-agnostic
+already — it maps hardware properties to compiler flags. Supporting C/C++
+means adding clang invocation alongside cargo in `worker.rs` and extending
+`koval.toml` to specify which build system to use.
+
+The Linux kernel compiles with clang. A Koval-built kernel optimized for
+the exact machine it runs on is not a ridiculous idea.
+
+### PGO integration
+
+Profile-Guided Optimization: compile a profiling binary, run it on the
+target, collect profiles, recompile with `-C profile-use`. Koval already
+has the target machine in the loop (via the probe). The two-pass
+compilation fits naturally into the existing job model as a two-stage job.
+
+### BOLT binary optimization
+
+Facebook's BOLT post-link optimizer rewrites binary layout based on
+execution profiles. Same two-pass structure as PGO, applied after
+linking. For latency-sensitive binaries, BOLT improvements can be
+substantial on top of PGO.
+
+### GPU-accelerated LLVM passes
+
+Speculative. The analysis lives in a separate research note — add it to `docs/gpu_compilation_research.md` if you want to track it in the repo. The short
+analysis. The short version: LLVM optimization passes are graph
+algorithms. GPU is fast at graph algorithms. Batching thousands of
+functions across a large compilation workload may amortize the GPU
+dispatch overhead enough to matter.
+
+Nobody has shipped this. The research question is whether irregular
+small-graph structure kills the GPU advantage regardless of batch size.
+Koval is the natural place to test the hypothesis once the core
+toolchain is stable — it already controls the full compilation pipeline
+and knows the target GPU from the hardware profile.
+
+---
+
+## What this will never try to be
+
+A general-purpose CI system. There are excellent options for that.
+Koval does one thing: it knows the hardware and forges binaries for it.
+
+---
+
+## Contributing
+
+All of the above is open. If something on this list matters to you,
+open an issue before starting — not to ask permission, but to avoid
+duplicating work and to get early feedback on the approach.
+
+The things most likely to be useful to more people, roughly in order:
+workspace support, build cache, cross-compilation, GitHub Actions
+integration.
+
+The things most likely to be interesting to work on, in no particular
+order: BOLT, PGO, GPU compilation research, NUMA-aware probe.
