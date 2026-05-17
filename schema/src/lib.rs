@@ -47,6 +47,8 @@ pub struct JobRequest {
     pub hardware: HardwareProfile,
     pub project: String,
     pub git_ref: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub binary: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -185,12 +187,71 @@ mod tests {
             hardware: profile,
             project: "https://github.com/example/project.git".to_string(),
             git_ref: "main".to_string(),
+            binary: None,
         };
 
         let serialized = serde_json::to_string(&request).expect("Failed to serialize JobRequest");
         let deserialized: JobRequest = serde_json::from_str(&serialized).expect("Failed to deserialize JobRequest");
 
         assert_eq!(request, deserialized);
+    }
+
+    #[test]
+    fn test_job_request_binary_field_serialization() {
+        let profile = HardwareProfile {
+            cpu: CpuProfile {
+                flags: vec![],
+                cache_topology: "".to_string(),
+                core_count: 4,
+            },
+            memory: MemoryProfile {
+                total_bytes: 8589934592,
+                available_bytes: 4294967296,
+                bandwidth_mbs: 12000.0,
+            },
+            storage: StorageProfile {
+                io_uring: false,
+                o_direct: false,
+                read_speed_mbs: 500.0,
+                write_speed_mbs: 450.0,
+            },
+            gpu: GpuProfile { devices: vec![] },
+        };
+
+        // Case 1: binary = None
+        let req_none = JobRequest {
+            hardware: profile.clone(),
+            project: "myproj".to_string(),
+            git_ref: "main".to_string(),
+            binary: None,
+        };
+        let serialized_none = serde_json::to_string(&req_none).unwrap();
+        assert!(!serialized_none.contains("\"binary\""));
+
+        // Case 2: binary = Some("server")
+        let req_some = JobRequest {
+            hardware: profile.clone(),
+            project: "myproj".to_string(),
+            git_ref: "main".to_string(),
+            binary: Some("server".to_string()),
+        };
+        let serialized_some = serde_json::to_string(&req_some).unwrap();
+        assert!(serialized_some.contains("\"binary\":\"server\""));
+
+        // Case 3: Deserializing old JSON without "binary" key
+        let old_json = r#"{
+            "project": "myproj",
+            "git_ref": "main",
+            "hardware": {
+                "cpu": {"flags":[], "cache_topology":"", "core_count":4},
+                "memory": {"total_bytes":8589934592, "available_bytes":4294967296, "bandwidth_mbs":12000.0},
+                "storage": {"io_uring":false, "o_direct":false, "read_speed_mbs":500.0, "write_speed_mbs":450.0},
+                "gpu": {"devices":[]}
+            }
+        }"#;
+        let deserialized: JobRequest = serde_json::from_str(old_json).unwrap();
+        assert_eq!(deserialized.binary, None);
+        assert_eq!(deserialized.project, "myproj");
     }
 
     #[test]

@@ -252,4 +252,89 @@ mod tests {
         let res_not_found = app.oneshot(req_not_found).await.unwrap();
         assert_eq!(res_not_found.status(), StatusCode::NOT_FOUND);
     }
+
+    #[tokio::test]
+    async fn test_e2e_authorized_job_handling_without_binary_field() {
+        let (app, _conn, _, _rx) = build_test_router();
+
+        // Submit request without "binary" field (defaults to None)
+        let payload = r#"{
+            "project": "https://github.com/example/lib",
+            "git_ref": "v1.0",
+            "hardware": {
+                "cpu": {"flags": ["avx2"], "cache_topology": "L1:32KB", "core_count": 4},
+                "memory": {"total_bytes": 8589934592, "available_bytes": 4294967296, "bandwidth_mbs": 12000.0},
+                "storage": {"io_uring": false, "o_direct": true, "read_speed_mbs": 450.0, "write_speed_mbs": 400.0},
+                "gpu": {"devices": []}
+            }
+        }"#;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/build")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::from(payload))
+            .unwrap();
+
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::ACCEPTED);
+
+        let body_bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let body_json: Value = serde_json::from_slice(&body_bytes).unwrap();
+        let job_id = body_json["id"].as_str().unwrap();
+
+        let req_status = Request::builder()
+            .method("GET")
+            .uri(&format!("/build/{}/status", job_id))
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::empty())
+            .unwrap();
+
+        let res_status = app.oneshot(req_status).await.unwrap();
+        assert_eq!(res_status.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_e2e_authorized_job_handling_with_binary_field() {
+        let (app, _conn, _, _rx) = build_test_router();
+
+        // Submit request with "binary" field
+        let payload = r#"{
+            "project": "https://github.com/example/lib",
+            "git_ref": "v1.0",
+            "binary": "mybinary",
+            "hardware": {
+                "cpu": {"flags": ["avx2"], "cache_topology": "L1:32KB", "core_count": 4},
+                "memory": {"total_bytes": 8589934592, "available_bytes": 4294967296, "bandwidth_mbs": 12000.0},
+                "storage": {"io_uring": false, "o_direct": true, "read_speed_mbs": 450.0, "write_speed_mbs": 400.0},
+                "gpu": {"devices": []}
+            }
+        }"#;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/build")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::from(payload))
+            .unwrap();
+
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::ACCEPTED);
+
+        let body_bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let body_json: Value = serde_json::from_slice(&body_bytes).unwrap();
+        let job_id = body_json["id"].as_str().unwrap();
+
+        let req_status = Request::builder()
+            .method("GET")
+            .uri(&format!("/build/{}/status", job_id))
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::empty())
+            .unwrap();
+
+        let res_status = app.oneshot(req_status).await.unwrap();
+        assert_eq!(res_status.status(), StatusCode::OK);
+    }
 }

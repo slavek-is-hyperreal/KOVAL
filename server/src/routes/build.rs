@@ -53,6 +53,7 @@ pub async fn build_handler(
         project: payload.project.clone(),
         git_ref: payload.git_ref.clone(),
         hardware,
+        binary: payload.binary.clone(),
     };
 
     // 4. Save job state in database

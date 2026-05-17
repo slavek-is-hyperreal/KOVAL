@@ -1,0 +1,10 @@
+# koval.toml for Koval Server Workspace Optimization
+
+[[rules]]
+cpu_flags = ["avx2"]
+rustflags = ["-C", "target-feature=+avx2"]
+env = { KOVAL_AVX2_ENABLED = "true" }
+
+[[rules]]
+min_cores = 4
+rustflags = ["-C", "opt-level=3"]

@@ -8,6 +8,7 @@ pub struct Job {
     pub project: String,
     pub git_ref: String,
     pub hardware: HardwareProfile,
+    pub binary: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -90,6 +91,7 @@ mod tests {
             project: "repo1".to_string(),
             git_ref: "master".to_string(),
             hardware: get_dummy_hardware(),
+            binary: None,
         };
 
         let job2 = Job {
@@ -98,6 +100,7 @@ mod tests {
             project: "repo2".to_string(),
             git_ref: "master".to_string(),
             hardware: get_dummy_hardware(),
+            binary: None,
         };
 
         let job3 = Job {
@@ -106,6 +109,7 @@ mod tests {
             project: "repo3".to_string(),
             git_ref: "master".to_string(),
             hardware: get_dummy_hardware(),
+            binary: None,
         };
 
         // 1. Queueing returns correct ID
@@ -127,6 +131,7 @@ mod tests {
             project: "repo3".to_string(),
             git_ref: "master".to_string(),
             hardware: get_dummy_hardware(),
+            binary: None,
         };
         assert_eq!(queue.enqueue(job3_retry).unwrap(), "job-3");
 

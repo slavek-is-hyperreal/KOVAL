@@ -54,6 +54,7 @@ Triggers a new background compilation job using a target hardware profile suppli
       - **pcie_info** (String or Null): PCIe generation and lane count.
 - **project** (String, Required): URL or path of the target Rust project to build (e.g. `"https://github.com/example/project.git"`).
 - **git_ref** (String, Required): Branch, tag, or exact commit hash to check out (e.g. `"main"`).
+- **binary** (String, Optional): The name of a specific binary target to compile (e.g. `"server"`). If omitted or `null`, Koval automatically builds the single root package, or all workspace binaries if the repository is a Cargo workspace.
 
 #### Response Schema
 - **202 Accepted**: The job is successfully authenticated, saved to SQLite, and pushed into the build queue.

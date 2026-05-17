@@ -129,6 +129,7 @@ Content-Type: application/json
 {
   "project": "https://github.com/you/my-project",
   "git_ref": "main",
+  "binary": "server", // Optional: specify target binary (otherwise builds root package/workspace)
   "hardware": { ...probe output... }
 }
 ```
