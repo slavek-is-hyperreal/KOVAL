@@ -1,0 +1,14 @@
+# Rust
+target/
+Cargo.lock
+
+# Koval Aggregation
+merge_files.py
+koval_code.txt
+koval_docs.txt
+
+# Databases and Local Data
+*.db
+artifacts/
+data/
+repos/
