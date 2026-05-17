@@ -68,6 +68,59 @@ pub struct Token {
     pub is_active: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct WebhookRequest {
+    pub url: String,
+    pub secret: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct WebhookRecord {
+    pub id: i64,
+    pub url: String,
+    pub created_at: String,
+    pub is_active: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct WebhookPayload {
+    pub job_id: String,
+    pub status: String,
+    pub finished_at: Option<String>,
+    pub project: String,
+    pub sha256: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct JobSummary {
+    pub id: String,
+    pub project: String,
+    pub git_ref: String,
+    pub status: String,
+    pub queued_at: String,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct TokenRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct TokenResponse {
+    pub id: i64,
+    pub plaintext_token: String,
+    pub name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct TokenRecord {
+    pub id: i64,
+    pub name: String,
+    pub created_at: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

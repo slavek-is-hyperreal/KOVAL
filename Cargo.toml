@@ -4,4 +4,5 @@ members = [
     "schema",
     "probe",
     "server",
+    "cli",
 ]

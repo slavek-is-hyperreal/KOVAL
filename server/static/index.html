@@ -1,0 +1,1032 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Koval — Realtime Job Monitor & Webhook Manager</title>
+    <!-- Premium Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --bg-gradient: radial-gradient(circle at 50% 50%, #150f30 0%, #090514 100%);
+            --card-bg: rgba(22, 17, 45, 0.6);
+            --card-border: rgba(255, 255, 255, 0.08);
+            --accent-purple: #8b5cf6;
+            --accent-fuchsia: #ec4899;
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --glow-purple: rgba(139, 92, 246, 0.4);
+            --glow-fuchsia: rgba(236, 72, 153, 0.4);
+            
+            --color-queued: #6b7280;
+            --color-building: #f59e0b;
+            --color-done: #10b981;
+            --color-failed: #ef4444;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background: var(--bg-gradient);
+            color: var(--text-main);
+            min-height: 100vh;
+            overflow-x: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Glassmorphic Background Circles */
+        .bg-decor {
+            position: absolute;
+            border-radius: 50%;
+            filter: blur(100px);
+            z-index: -1;
+            opacity: 0.5;
+        }
+        .decor-1 {
+            width: 400px;
+            height: 400px;
+            background: var(--accent-purple);
+            top: -100px;
+            left: -100px;
+            animation: pulse-decor 10s infinite alternate;
+        }
+        .decor-2 {
+            width: 500px;
+            height: 500px;
+            background: var(--accent-fuchsia);
+            bottom: -150px;
+            right: -100px;
+            animation: pulse-decor 12s infinite alternate-reverse;
+        }
+
+        @keyframes pulse-decor {
+            0% { transform: scale(1) translate(0, 0); }
+            100% { transform: scale(1.2) translate(50px, 50px); }
+        }
+
+        /* Header Navigation */
+        header {
+            width: 100%;
+            padding: 1.5rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            backdrop-filter: blur(12px);
+            background: rgba(9, 5, 20, 0.5);
+            border-bottom: 1px solid var(--card-border);
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-size: 1.5rem;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+            background: linear-gradient(to right, #a78bfa, #f472b6);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .brand-logo {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, var(--accent-purple), var(--accent-fuchsia));
+            border-radius: 8px;
+            box-shadow: 0 0 15px var(--glow-purple);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1rem;
+            color: #fff;
+            -webkit-text-fill-color: initial;
+        }
+
+        .nav-actions {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            color: var(--color-done);
+            padding: 0.4rem 1rem;
+            border-radius: 9999px;
+            font-size: 0.875rem;
+            font-weight: 500;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background: var(--color-done);
+            border-radius: 50%;
+            box-shadow: 0 0 8px var(--color-done);
+            animation: pulse-dot 1.5s infinite;
+        }
+
+        @keyframes pulse-dot {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.4); opacity: 0.5; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        /* Container Layout */
+        .container {
+            max-width: 1200px;
+            width: 100%;
+            margin: 2rem auto;
+            padding: 0 1.5rem;
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 2rem;
+        }
+
+        /* Glassmorphic Cards */
+        .card {
+            background: var(--card-bg);
+            backdrop-filter: blur(16px);
+            border: 1px solid var(--card-border);
+            border-radius: 16px;
+            padding: 1.5rem 2rem;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.37);
+            position: relative;
+            overflow: hidden;
+            transition: border-color 0.3s ease, box-shadow 0.3s ease;
+        }
+        .card:hover {
+            border-color: rgba(255, 255, 255, 0.15);
+            box-shadow: 0 8px 32px rgba(139, 92, 246, 0.05);
+        }
+
+        .card-header {
+            margin-bottom: 1.5rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .card-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        /* Authentication Page Overlay */
+        #auth-page {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: var(--bg-gradient);
+            z-index: 100;
+        }
+
+        .auth-card {
+            width: 100%;
+            max-width: 440px;
+            text-align: center;
+            padding: 3rem 2.5rem;
+        }
+
+        .auth-subtitle {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+            margin-top: 0.5rem;
+            margin-bottom: 2rem;
+        }
+
+        /* Standard Premium Inputs & Buttons */
+        .form-group {
+            margin-bottom: 1.25rem;
+            text-align: left;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: var(--text-muted);
+            margin-bottom: 0.5rem;
+        }
+
+        .form-input {
+            width: 100%;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--card-border);
+            color: #fff;
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
+            font-family: inherit;
+            font-size: 0.95rem;
+            outline: none;
+            transition: all 0.3s ease;
+        }
+        .form-input:focus {
+            background: rgba(255, 255, 255, 0.08);
+            border-color: var(--accent-purple);
+            box-shadow: 0 0 10px rgba(139, 92, 246, 0.2);
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-family: inherit;
+            font-weight: 600;
+            font-size: 0.95rem;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            border: none;
+            cursor: pointer;
+            outline: none;
+            transition: all 0.3s ease;
+            gap: 0.5rem;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent-purple), var(--accent-fuchsia));
+            color: #fff;
+            box-shadow: 0 4px 15px rgba(236, 72, 153, 0.2);
+        }
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(236, 72, 153, 0.4);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--text-main);
+            border: 1px solid var(--card-border);
+        }
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.12);
+        }
+
+        .btn-danger {
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--color-failed);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+        .btn-danger:hover {
+            background: rgba(239, 68, 68, 0.25);
+        }
+
+        /* Banner styling */
+        .admin-banner {
+            background: linear-gradient(to right, rgba(139, 92, 246, 0.2), rgba(236, 72, 153, 0.2));
+            border: 1px solid var(--accent-purple);
+            padding: 1rem 1.5rem;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .admin-badge {
+            background: linear-gradient(135deg, var(--accent-purple), var(--accent-fuchsia));
+            color: #fff;
+            font-size: 0.75rem;
+            font-weight: 700;
+            padding: 0.25rem 0.6rem;
+            border-radius: 4px;
+            text-transform: uppercase;
+        }
+
+        /* Layout Columns */
+        .grid-layout {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 2rem;
+        }
+
+        @media (max-width: 1024px) {
+            .grid-layout {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Dynamic Badge Indicators */
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .badge-queued {
+            background: rgba(107, 114, 128, 0.15);
+            color: var(--text-muted);
+            border: 1px solid rgba(107, 114, 128, 0.3);
+        }
+
+        .badge-building {
+            background: rgba(245, 158, 11, 0.15);
+            color: var(--color-building);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+            animation: pulse-badge-building 2s infinite;
+        }
+
+        .badge-done {
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--color-done);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+        }
+
+        .badge-failed {
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--color-failed);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+
+        @keyframes pulse-badge-building {
+            0% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4); }
+            70% { box-shadow: 0 0 0 6px rgba(245, 158, 11, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
+        }
+
+        /* Premium Table UI */
+        .table-wrapper {
+            width: 100%;
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+        }
+
+        th {
+            padding: 0.875rem 1rem;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+            font-weight: 600;
+            border-bottom: 1px solid var(--card-border);
+        }
+
+        td {
+            padding: 1rem;
+            font-size: 0.925rem;
+            color: var(--text-main);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+            white-space: nowrap;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        .mono {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        .clickable-id {
+            color: var(--accent-purple);
+            text-decoration: none;
+            font-weight: 500;
+            transition: color 0.2s ease;
+        }
+        .clickable-id:hover {
+            color: var(--accent-fuchsia);
+        }
+
+        /* Inline Forms */
+        .inline-form {
+            display: flex;
+            gap: 1rem;
+            align-items: flex-end;
+            margin-bottom: 1.5rem;
+        }
+
+        @media (max-width: 640px) {
+            .inline-form {
+                flex-direction: column;
+                align-items: stretch;
+            }
+        }
+
+        .empty-state {
+            padding: 3rem 1rem;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.95rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        /* Modal Dialog / Copy box popup */
+        .token-display-box {
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px dashed var(--accent-purple);
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.95rem;
+            word-break: break-all;
+            color: #fff;
+            position: relative;
+        }
+
+        /* Notification Toast */
+        .toast {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            background: #1e1b4b;
+            border-left: 4px solid var(--accent-fuchsia);
+            padding: 1rem 1.5rem;
+            border-radius: 8px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+            z-index: 999;
+            transform: translateY(150%);
+            transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-weight: 500;
+        }
+        .toast.show {
+            transform: translateY(0);
+        }
+
+        /* Modal Box for plain token */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0, 0, 0, 0.75);
+            backdrop-filter: blur(8px);
+            z-index: 500;
+            display: none;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-content {
+            background: #110c25;
+            border: 1px solid var(--accent-purple);
+            border-radius: 16px;
+            max-width: 500px;
+            width: 90%;
+            padding: 2rem;
+            box-shadow: 0 15px 40px rgba(0,0,0,0.6);
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="bg-decor decor-1"></div>
+    <div class="bg-decor decor-2"></div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast">
+        <span id="toast-text">Notification!</span>
+    </div>
+
+    <!-- Modal Box for Token Generator (Plaintext display) -->
+    <div id="token-modal" class="modal-overlay">
+        <div class="modal-content">
+            <h3 style="font-size:1.5rem; margin-bottom:1rem; background: linear-gradient(to right, #a78bfa, #f472b6); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Token Created Successfully</h3>
+            <p style="color:var(--text-muted); font-size:0.9rem; margin-bottom:1.5rem;">
+                This token is shown <strong style="color:var(--color-failed)">EXACTLY ONCE</strong>. Copy it immediately! It cannot be recovered.
+            </p>
+            <div id="token-display" class="token-display-box">
+                koval_tkn_xxxxxxxxx
+            </div>
+            <button class="btn btn-primary" onclick="copyTokenAndClose()" style="width:100%;">Copy & Close</button>
+        </div>
+    </div>
+
+    <!-- 1. AUTHENTICATION OVERLAY PAGE -->
+    <div id="auth-page">
+        <div class="card auth-card">
+            <div class="brand" style="justify-content: center; margin-bottom: 1rem;">
+                <div class="brand-logo">K</div>
+                Koval
+            </div>
+            <p class="auth-subtitle">High-Performance Compiler Sandbox Engine</p>
+            
+            <form id="login-form" onsubmit="handleConnect(event)">
+                <div class="form-group">
+                    <label class="form-label" for="token-input">Developer Bearer Token</label>
+                    <input class="form-input" type="password" id="token-input" placeholder="Bearer Token" required>
+                </div>
+                <button type="submit" class="btn btn-primary" style="width:100%;">Connect to Engine</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- 2. MAIN APPLICATION CONTENT -->
+    <header>
+        <div class="brand">
+            <div class="brand-logo">K</div>
+            Koval
+        </div>
+        <div class="nav-actions">
+            <div class="status-indicator">
+                <div class="status-dot"></div>
+                <span id="header-status">Status: Connected</span>
+            </div>
+            <button class="btn btn-secondary" onclick="handleDisconnect()" style="padding: 0.4rem 1rem; font-size:0.875rem;">Disconnect</button>
+        </div>
+    </header>
+
+    <div class="container">
+        <!-- Admin Banner / Token Area (Displayed conditionally) -->
+        <div id="admin-area" style="display: none;">
+            <div class="admin-banner">
+                <span class="admin-badge">Admin Mode</span>
+                <span style="font-weight: 500;">You are connected with the root system administrative privileges.</span>
+            </div>
+
+            <!-- Token Management Area -->
+            <div class="card" style="margin-bottom: 2rem;">
+                <div class="card-header">
+                    <h2 class="card-title">Token Administration</h2>
+                </div>
+                <form class="inline-form" id="create-token-form" onsubmit="handleCreateToken(event)">
+                    <div class="form-group" style="flex-grow: 1; margin-bottom: 0;">
+                        <label class="form-label" for="new-token-name">Token Name / Client Description</label>
+                        <input class="form-input" type="text" id="new-token-name" placeholder="e.g. CI/CD Runner, Probe Dev Node" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Generate Token</button>
+                </form>
+
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Name / Owner</th>
+                                <th>Created At</th>
+                                <th style="text-align: right;">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tokens-table-body">
+                            <!-- Populated dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Workspace Grid -->
+        <div class="grid-layout">
+            <!-- Left Column: Recent Compile Jobs -->
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">Compilation Job History</h2>
+                    <button class="btn btn-secondary" onclick="refreshData()" style="padding: 0.35rem 0.75rem; font-size: 0.8rem;">Refresh Now</button>
+                </div>
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Job ID</th>
+                                <th>Repository / Project</th>
+                                <th>Branch/Tag</th>
+                                <th>Status</th>
+                                <th>Queued At</th>
+                                <th style="text-align: right;">Outputs</th>
+                            </tr>
+                        </thead>
+                        <tbody id="jobs-table-body">
+                            <!-- Populated dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+                <div id="jobs-empty" class="empty-state" style="display: none;">
+                    <span>No compilation jobs found. Submit compile requests using CLI or API.</span>
+                </div>
+            </div>
+
+            <!-- Right Column: Webhook Subscriptions -->
+            <div class="card" style="height: fit-content;">
+                <div class="card-header">
+                    <h2 class="card-title">Webhook Subscriptions</h2>
+                </div>
+                <form class="inline-form" id="register-webhook-form" onsubmit="handleRegisterWebhook(event)" style="flex-direction: column; align-items: stretch; gap: 0.75rem;">
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label class="form-label" for="webhook-url">Target Endpoint URL</label>
+                        <input class="form-input" type="url" id="webhook-url" placeholder="https://api.myclient.com/webhooks" required>
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label class="form-label" for="webhook-secret">HMAC Secret Key</label>
+                        <input class="form-input" type="password" id="webhook-secret" placeholder="Secret signing key" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary" style="margin-top: 0.5rem;">Register Webhook</button>
+                </form>
+
+                <div class="table-wrapper" style="margin-top: 1rem;">
+                    <table style="width: 100%;">
+                        <thead>
+                            <tr>
+                                <th>Webhook URL</th>
+                                <th style="text-align: right;">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="webhooks-table-body">
+                            <!-- Populated dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+                <div id="webhooks-empty" class="empty-state" style="display: none; padding: 1.5rem 1rem;">
+                    <span>No active webhooks configured.</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- UI Interaction logic -->
+    <script>
+        let pollIntervalId = null;
+
+        // On Load Check session storage
+        window.addEventListener('DOMContentLoaded', () => {
+            const storedToken = sessionStorage.getItem('koval_auth_token');
+            if (storedToken) {
+                document.getElementById('auth-page').style.display = 'none';
+                startPolling();
+                refreshData();
+            }
+        });
+
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            document.getElementById('toast-text').innerText = message;
+            toast.classList.add('show');
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, 3000);
+        }
+
+        // Connection Handle
+        function handleConnect(e) {
+            e.preventDefault();
+            const token = document.getElementById('token-input').value.trim();
+            if (!token) return;
+
+            sessionStorage.setItem('koval_auth_token', token);
+            document.getElementById('auth-page').style.display = 'none';
+            document.getElementById('token-input').value = '';
+            
+            showToast("Successfully connected to Koval Engine!");
+            startPolling();
+            refreshData();
+        }
+
+        function handleDisconnect() {
+            sessionStorage.removeItem('koval_auth_token');
+            document.getElementById('auth-page').style.display = 'flex';
+            document.getElementById('admin-area').style.display = 'none';
+            stopPolling();
+            showToast("Disconnected from engine.");
+        }
+
+        // Fetch wrapper with auth header
+        async function apiRequest(endpoint, options = {}) {
+            const token = sessionStorage.getItem('koval_auth_token');
+            if (!token) {
+                handleDisconnect();
+                return null;
+            }
+
+            options.headers = options.headers || {};
+            options.headers['Authorization'] = `Bearer ${token}`;
+
+            try {
+                const response = await fetch(endpoint, options);
+                if (response.status === 401) {
+                    handleDisconnect();
+                    throw new Error("Unauthorized access. Token rejected.");
+                }
+                return response;
+            } catch (err) {
+                console.error("API call error:", err);
+                return null;
+            }
+        }
+
+        // Fetch all workspace information
+        async function refreshData() {
+            const token = sessionStorage.getItem('koval_auth_token');
+            if (!token) return;
+
+            const isAdmin = (token === "koval_tkn_default_admin");
+            if (isAdmin) {
+                document.getElementById('admin-area').style.display = 'block';
+                await loadTokensList();
+            } else {
+                document.getElementById('admin-area').style.display = 'none';
+            }
+
+            await loadJobsList();
+            await loadWebhooksList();
+        }
+
+        // 1. Fetch & Render Jobs
+        async function loadJobsList() {
+            const response = await apiRequest('/jobs');
+            if (!response) return;
+
+            if (response.status === 200) {
+                const jobs = await response.json();
+                renderJobs(jobs);
+            }
+        }
+
+        function renderJobs(jobs) {
+            const tbody = document.getElementById('jobs-table-body');
+            const emptyState = document.getElementById('jobs-empty');
+            tbody.innerHTML = '';
+
+            if (jobs.length === 0) {
+                emptyState.style.display = 'flex';
+                return;
+            }
+            emptyState.style.display = 'none';
+
+            let hasActiveJobs = false;
+
+            jobs.forEach(job => {
+                const row = document.createElement('tr');
+                
+                // Job Status Class Badge
+                let badgeClass = 'badge-queued';
+                if (job.status === 'building') badgeClass = 'badge-building';
+                if (job.status === 'done') badgeClass = 'badge-done';
+                if (job.status === 'failed') badgeClass = 'badge-failed';
+
+                if (job.status === 'queued' || job.status === 'building') {
+                    hasActiveJobs = true;
+                }
+
+                // Shorten Job ID for display
+                const shortId = job.id.substring(0, 8);
+                const queuedDate = new Date(job.queued_at).toLocaleString();
+
+                // Download/Details column
+                let actionCol = `<span class="mono">No outputs</span>`;
+                if (job.status === 'done') {
+                    actionCol = `<a href="/build/${job.id}/binary" class="btn btn-primary" style="padding: 0.25rem 0.6rem; font-size:0.75rem; text-decoration:none;">Download Tar</a>`;
+                } else if (job.status === 'failed') {
+                    actionCol = `<span style="color:var(--color-failed); font-size:0.8rem; font-weight:500;">Failed</span>`;
+                }
+
+                row.innerHTML = `
+                    <td><a href="#" onclick="showJobDetails('${job.id}')" class="mono clickable-id">${shortId}</a></td>
+                    <td style="font-weight:500;">${escapeHtml(job.project)}</td>
+                    <td><span class="mono">${escapeHtml(job.git_ref)}</span></td>
+                    <td><span class="badge ${badgeClass}">${job.status}</span></td>
+                    <td class="mono">${queuedDate}</td>
+                    <td style="text-align: right;">${actionCol}</td>
+                `;
+                tbody.appendChild(row);
+            });
+
+            // Adjust polling frequency based on active jobs in the queue
+            if (!hasActiveJobs && pollIntervalId) {
+                // No active jobs? Slow down polling to avoid spamming server
+                adjustPollingSpeed(15000);
+            } else if (hasActiveJobs) {
+                // Active jobs? Maintain rapid 5s refresh
+                adjustPollingSpeed(5000);
+            }
+        }
+
+        async function showJobDetails(id) {
+            const response = await apiRequest(`/build/${id}/status`);
+            if (response && response.status === 200) {
+                const statusInfo = await response.json();
+                let msg = `Job ID: ${id}\nStatus: ${statusInfo.status}\nQueued At: ${statusInfo.queued_at}`;
+                if (statusInfo.started_at) msg += `\nStarted At: ${statusInfo.started_at}`;
+                if (statusInfo.finished_at) msg += `\nFinished At: ${statusInfo.finished_at}`;
+                if (statusInfo.error_msg) msg += `\n\nError Message:\n${statusInfo.error_msg}`;
+                alert(msg);
+            } else {
+                showToast("Failed to fetch job details.");
+            }
+        }
+
+        // 2. Fetch & Render Webhooks
+        async function loadWebhooksList() {
+            const response = await apiRequest('/webhooks');
+            if (!response) return;
+
+            if (response.status === 200) {
+                const webhooks = await response.json();
+                renderWebhooks(webhooks);
+            }
+        }
+
+        function renderWebhooks(webhooks) {
+            const tbody = document.getElementById('webhooks-table-body');
+            const emptyState = document.getElementById('webhooks-empty');
+            tbody.innerHTML = '';
+
+            if (webhooks.length === 0) {
+                emptyState.style.display = 'flex';
+                return;
+            }
+            emptyState.style.display = 'none';
+
+            webhooks.forEach(wh => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td style="font-weight: 500; overflow:hidden; text-overflow:ellipsis; max-width:250px;">${escapeHtml(wh.url)}</td>
+                    <td style="text-align: right;">
+                        <button class="btn btn-danger" onclick="handleDeactivateWebhook(${wh.id})" style="padding: 0.25rem 0.5rem; font-size:0.75rem;">Deactivate</button>
+                    </td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        async function handleRegisterWebhook(e) {
+            e.preventDefault();
+            const url = document.getElementById('webhook-url').value.trim();
+            const secret = document.getElementById('webhook-secret').value.trim();
+            if (!url || !secret) return;
+
+            const response = await apiRequest('/webhooks', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url, secret })
+            });
+
+            if (response && response.status === 201) {
+                showToast("Webhook registered successfully!");
+                document.getElementById('webhook-url').value = '';
+                document.getElementById('webhook-secret').value = '';
+                loadWebhooksList();
+            } else {
+                showToast("Failed to register webhook.");
+            }
+        }
+
+        async function handleDeactivateWebhook(id) {
+            const response = await apiRequest(`/webhooks/${id}`, {
+                method: 'DELETE'
+            });
+
+            if (response && response.status === 204) {
+                showToast("Webhook deactivated successfully.");
+                loadWebhooksList();
+            } else {
+                showToast("Failed to deactivate webhook.");
+            }
+        }
+
+        // 3. Fetch & Render Admin Tokens
+        async function loadTokensList() {
+            const response = await apiRequest('/tokens');
+            if (!response) return;
+
+            if (response.status === 200) {
+                const tokens = await response.json();
+                renderTokens(tokens);
+            }
+        }
+
+        function renderTokens(tokens) {
+            const tbody = document.getElementById('tokens-table-body');
+            tbody.innerHTML = '';
+
+            tokens.forEach(tok => {
+                const row = document.createElement('tr');
+                const createdDate = new Date(tok.created_at).toLocaleString();
+                row.innerHTML = `
+                    <td class="mono">${tok.id}</td>
+                    <td style="font-weight: 500;">${escapeHtml(tok.name)}</td>
+                    <td class="mono">${createdDate}</td>
+                    <td style="text-align: right;">
+                        <button class="btn btn-danger" onclick="handleRevokeToken(${tok.id})" style="padding: 0.25rem 0.5rem; font-size:0.75rem;">Revoke</button>
+                    </td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        async function handleCreateToken(e) {
+            e.preventDefault();
+            const name = document.getElementById('new-token-name').value.trim();
+            if (!name) return;
+
+            const response = await apiRequest('/tokens', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name })
+            });
+
+            if (response && response.status === 201) {
+                const resData = await response.json();
+                showPlaintextTokenModal(resData.plaintext_token);
+                document.getElementById('new-token-name').value = '';
+                loadTokensList();
+            } else {
+                showToast("Failed to generate token.");
+            }
+        }
+
+        async function handleRevokeToken(id) {
+            const response = await apiRequest(`/tokens/${id}`, {
+                method: 'DELETE'
+            });
+
+            if (response && response.status === 204) {
+                showToast("Token revoked successfully.");
+                loadTokensList();
+            } else {
+                showToast("Failed to revoke token.");
+            }
+        }
+
+        // Plain token modal display helpers
+        let tempPlaintextToken = "";
+        function showPlaintextTokenModal(token) {
+            tempPlaintextToken = token;
+            document.getElementById('token-display').innerText = token;
+            document.getElementById('token-modal').style.display = 'flex';
+        }
+
+        function copyTokenAndClose() {
+            navigator.clipboard.writeText(tempPlaintextToken).then(() => {
+                showToast("Token copied to clipboard!");
+            }).catch(err => {
+                console.error("Clipboard write failed", err);
+            });
+            document.getElementById('token-modal').style.display = 'none';
+        }
+
+        // Automatic Polling loops
+        function startPolling() {
+            stopPolling();
+            pollIntervalId = setInterval(refreshData, 5000);
+        }
+
+        function stopPolling() {
+            if (pollIntervalId) {
+                clearInterval(pollIntervalId);
+                pollIntervalId = null;
+            }
+        }
+
+        function adjustPollingSpeed(ms) {
+            // Adjust polling speed dynamically without interruption
+            stopPolling();
+            pollIntervalId = setInterval(refreshData, ms);
+        }
+
+        // Security utilities
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+    </script>
+</body>
+</html>

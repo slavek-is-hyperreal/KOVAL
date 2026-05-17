@@ -73,10 +73,35 @@ fn process_job(
 
     // Helper closure to fail the job and update DB
     let fail_job = |err_msg: &str| -> Result<(), Box<dyn std::error::Error>> {
-        let conn = conn_mutex.lock().unwrap();
         let finished_str = Utc::now().to_rfc3339();
-        db::update_job_status(&conn, &job.id, "failed", None, Some(&finished_str), Some(err_msg))?;
+        let webhooks = {
+            let conn = conn_mutex.lock().unwrap();
+            db::get_webhooks_delivery_info(&conn, job.token_id).ok().unwrap_or_default()
+        };
+
+        {
+            let conn = conn_mutex.lock().unwrap();
+            db::update_job_status(&conn, &job.id, "failed", None, Some(&finished_str), Some(err_msg))?;
+        }
+
         std::fs::remove_dir_all(&build_dir).ok();
+
+        // Trigger Webhook Delivery
+        let payload = schema::WebhookPayload {
+            job_id: job.id.clone(),
+            status: "failed".to_string(),
+            finished_at: Some(finished_str),
+            project: job.project.clone(),
+            sha256: None,
+        };
+
+        if !webhooks.is_empty() {
+            let handle = tokio::runtime::Handle::current();
+            handle.spawn(async move {
+                crate::webhook::deliver(payload, webhooks).await;
+            });
+        }
+
         Ok(())
     };
 
@@ -215,12 +240,32 @@ fn process_job(
         let file_size = archive_path.metadata()?.len();
 
         // 9. Store artifact record and transition to done
+        let finished_str = Utc::now().to_rfc3339();
+        let webhooks = {
+            let conn = conn_mutex.lock().unwrap();
+            db::get_webhooks_delivery_info(&conn, job.token_id).ok().unwrap_or_default()
+        };
+
         {
             let conn = conn_mutex.lock().unwrap();
-            let finished_str = Utc::now().to_rfc3339();
-            
             db::insert_artifact(&conn, &job.id, &archive_path.to_string_lossy(), file_size, &sha256_hash)?;
             db::update_job_status(&conn, &job.id, "done", None, Some(&finished_str), None)?;
+        }
+
+        // Trigger Webhook Delivery
+        let payload = schema::WebhookPayload {
+            job_id: job.id.clone(),
+            status: "done".to_string(),
+            finished_at: Some(finished_str),
+            project: job.project.clone(),
+            sha256: Some(sha256_hash),
+        };
+
+        if !webhooks.is_empty() {
+            let handle = tokio::runtime::Handle::current();
+            handle.spawn(async move {
+                crate::webhook::deliver(payload, webhooks).await;
+            });
         }
     }
 

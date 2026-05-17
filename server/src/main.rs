@@ -11,6 +11,7 @@ pub mod db;
 pub mod forge;
 pub mod queue;
 pub mod routes;
+pub mod webhook;
 pub mod worker;
 
 use crate::queue::JobQueue;
@@ -82,6 +83,12 @@ async fn main() {
         .route("/build", post(routes::build::build_handler))
         .route("/build/:id/status", get(routes::status::status_handler))
         .route("/build/:id/binary", get(routes::binary::binary_handler))
+        .route("/webhooks", post(routes::webhooks::register_webhook_handler).get(routes::webhooks::list_webhooks_handler))
+        .route("/webhooks/:id", axum::routing::delete(routes::webhooks::delete_webhook_handler))
+        .route("/tokens", post(routes::tokens::create_token_handler).get(routes::tokens::list_tokens_handler))
+        .route("/tokens/:id", axum::routing::delete(routes::tokens::delete_token_handler))
+        .route("/ui", get(routes::ui::ui_handler))
+        .route("/jobs", get(routes::jobs::list_jobs_handler))
         .with_state(state);
 
     // 7. Bind and run Axum server

@@ -59,6 +59,19 @@ pub fn init_db<P: AsRef<Path>>(path: P) -> Result<Connection, rusqlite::Error> {
         [],
     )?;
 
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS webhooks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            token_id INTEGER NOT NULL,
+            url TEXT NOT NULL,
+            secret TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            is_active INTEGER NOT NULL CHECK (is_active IN (0, 1)),
+            FOREIGN KEY(token_id) REFERENCES tokens(id)
+        );",
+        [],
+    )?;
+
     Ok(conn)
 }
 
@@ -287,6 +300,131 @@ pub fn get_active_tokens(conn: &Connection) -> Result<Vec<Token>, rusqlite::Erro
     Ok(tokens)
 }
 
+// WEBHOOK QUERIES
+
+pub fn insert_webhook(
+    conn: &Connection,
+    token_id: i64,
+    url: &str,
+    secret: &str,
+    created_at: &str,
+) -> Result<i64, rusqlite::Error> {
+    conn.execute(
+        "INSERT INTO webhooks (token_id, url, secret, created_at, is_active) VALUES (?1, ?2, ?3, ?4, 1)",
+        params![token_id, url, secret, created_at],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn get_webhooks_for_token(
+    conn: &Connection,
+    token_id: i64,
+) -> Result<Vec<schema::WebhookRecord>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, url, created_at, is_active FROM webhooks WHERE token_id = ?1 AND is_active = 1"
+    )?;
+    let iter = stmt.query_map(params![token_id], |row| {
+        let is_active_int: i32 = row.get(3)?;
+        Ok(schema::WebhookRecord {
+            id: row.get(0)?,
+            url: row.get(1)?,
+            created_at: row.get(2)?,
+            is_active: is_active_int == 1,
+        })
+    })?;
+    let mut list = Vec::new();
+    for item in iter {
+        list.push(item?);
+    }
+    Ok(list)
+}
+
+pub fn deactivate_webhook(
+    conn: &Connection,
+    id: i64,
+    token_id: i64,
+) -> Result<(), rusqlite::Error> {
+    let rows_affected = conn.execute(
+        "UPDATE webhooks SET is_active = 0 WHERE id = ?1 AND token_id = ?2",
+        params![id, token_id],
+    )?;
+    if rows_affected == 0 {
+        return Err(rusqlite::Error::QueryReturnedNoRows);
+    }
+    Ok(())
+}
+
+pub fn get_webhooks_delivery_info(
+    conn: &Connection,
+    token_id: i64,
+) -> Result<Vec<(String, String)>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT url, secret FROM webhooks WHERE token_id = ?1 AND is_active = 1"
+    )?;
+    let iter = stmt.query_map(params![token_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut list = Vec::new();
+    for item in iter {
+        list.push(item?);
+    }
+    Ok(list)
+}
+
+// ADDITIONAL TOKEN ADMIN QUERIES
+
+pub fn get_active_token_records(
+    conn: &Connection,
+) -> Result<Vec<schema::TokenRecord>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, created_at FROM tokens WHERE is_active = 1"
+    )?;
+    let iter = stmt.query_map([], |row| {
+        Ok(schema::TokenRecord {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            created_at: row.get(2)?,
+        })
+    })?;
+    let mut list = Vec::new();
+    for item in iter {
+        list.push(item?);
+    }
+    Ok(list)
+}
+
+// RECENT JOBS QUERY
+
+pub fn get_recent_jobs(
+    conn: &Connection,
+    token_id: i64,
+    limit: usize,
+) -> Result<Vec<schema::JobSummary>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, project, git_ref, status, queued_at, started_at, finished_at 
+         FROM jobs 
+         WHERE token_id = ?1 
+         ORDER BY queued_at DESC 
+         LIMIT ?2"
+    )?;
+    let iter = stmt.query_map(params![token_id, limit as i64], |row| {
+        Ok(schema::JobSummary {
+            id: row.get(0)?,
+            project: row.get(1)?,
+            git_ref: row.get(2)?,
+            status: row.get(3)?,
+            queued_at: row.get(4)?,
+            started_at: row.get(5)?,
+            finished_at: row.get(6)?,
+        })
+    })?;
+    let mut list = Vec::new();
+    for item in iter {
+        list.push(item?);
+    }
+    Ok(list)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -370,5 +508,48 @@ mod tests {
         let status_done = get_job_status(&conn, job_id).unwrap().expect("Job should exist");
         assert_eq!(status_done.status, "done");
         assert_eq!(status_done.finished_at, Some("2026-05-17T16:55:00Z".to_string()));
+    }
+
+    #[test]
+    fn test_db_webhooks_and_recent_jobs() {
+        let conn = setup_mem_db();
+        let token_hash = "$2b$12$webhookstoken".to_string();
+        let token_id = insert_token(&conn, &token_hash, "Webhook Tester", "2026-05-17T16:53:00Z").unwrap();
+
+        // 1. Insert and list webhooks
+        let wh_id = insert_webhook(&conn, token_id, "https://example.com/webhook", "super_secret", "2026-05-17T16:53:00Z").unwrap();
+        assert!(wh_id > 0);
+
+        let list = get_webhooks_for_token(&conn, token_id).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, wh_id);
+        assert_eq!(list[0].url, "https://example.com/webhook");
+        assert!(list[0].is_active);
+
+        // Check delivery info (url, secret)
+        let delivery = get_webhooks_delivery_info(&conn, token_id).unwrap();
+        assert_eq!(delivery.len(), 1);
+        assert_eq!(delivery[0].0, "https://example.com/webhook");
+        assert_eq!(delivery[0].1, "super_secret");
+
+        // 2. Deactivate webhook
+        deactivate_webhook(&conn, wh_id, token_id).unwrap();
+        let list_after = get_webhooks_for_token(&conn, token_id).unwrap();
+        assert_eq!(list_after.len(), 0);
+
+        // 3. Test recent jobs list
+        let hardware = HardwareProfile {
+            cpu: CpuProfile { flags: vec![], cache_topology: "".to_string(), core_count: 1 },
+            memory: MemoryProfile { total_bytes: 1024, available_bytes: 512, bandwidth_mbs: 100.0 },
+            storage: StorageProfile { io_uring: false, o_direct: false, read_speed_mbs: 10.0, write_speed_mbs: 10.0 },
+            gpu: GpuProfile { devices: vec![] },
+        };
+        insert_job(&conn, "job-1", token_id, "project1", "ref1", &hardware, "2026-05-17T16:53:00Z").unwrap();
+        insert_job(&conn, "job-2", token_id, "project2", "ref2", &hardware, "2026-05-17T16:54:00Z").unwrap();
+
+        let recent = get_recent_jobs(&conn, token_id, 5).unwrap();
+        assert_eq!(recent.len(), 2);
+        assert_eq!(recent[0].id, "job-2"); // ordered descending by queued_at
+        assert_eq!(recent[1].id, "job-1");
     }
 }

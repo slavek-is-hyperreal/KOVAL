@@ -6,6 +6,10 @@ use crate::queue::JobQueue;
 pub mod build;
 pub mod status;
 pub mod binary;
+pub mod webhooks;
+pub mod tokens;
+pub mod ui;
+pub mod jobs;
 
 #[derive(Clone)]
 pub struct AppState {
