@@ -4,8 +4,8 @@ Cargo.lock
 
 # Koval Aggregation
 merge_files.py
-koval_code.txt
-koval_docs.txt
+koval_code*.txt
+koval_docs*.txt
 
 # Databases and Local Data
 *.db
