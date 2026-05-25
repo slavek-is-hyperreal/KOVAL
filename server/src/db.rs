@@ -504,6 +504,7 @@ mod tests {
                 flags: vec!["avx2".to_string()],
                 cache_topology: "".to_string(),
                 core_count: 4,
+                ..Default::default()
             },
             memory: MemoryProfile {
                 total_bytes: 8192,
@@ -517,6 +518,7 @@ mod tests {
                 write_speed_mbs: 100.0,
             },
             gpu: GpuProfile { devices: vec![] },
+            ..Default::default()
         };
 
         let job_id = "job-uuid-1234";
@@ -573,10 +575,11 @@ mod tests {
 
         // 3. Test recent jobs list
         let hardware = HardwareProfile {
-            cpu: CpuProfile { flags: vec![], cache_topology: "".to_string(), core_count: 1 },
+            cpu: CpuProfile { flags: vec![], cache_topology: "".to_string(), core_count: 1, ..Default::default() },
             memory: MemoryProfile { total_bytes: 1024, available_bytes: 512, bandwidth_mbs: 100.0 },
             storage: StorageProfile { io_uring: false, o_direct: false, read_speed_mbs: 10.0, write_speed_mbs: 10.0 },
             gpu: GpuProfile { devices: vec![] },
+            ..Default::default()
         };
         insert_job(&conn, "job-1", token_id, "project1", "ref1", &hardware, "2026-05-17T16:53:00Z").unwrap();
         insert_job(&conn, "job-2", token_id, "project2", "ref2", &hardware, "2026-05-17T16:54:00Z").unwrap();
@@ -594,10 +597,11 @@ mod tests {
         let token_id = insert_token(&conn, &token_hash, "Cache Client", "2026-05-17T16:53:00Z").unwrap();
 
         let hardware = HardwareProfile {
-            cpu: CpuProfile { flags: vec![], cache_topology: "".to_string(), core_count: 1 },
+            cpu: CpuProfile { flags: vec![], cache_topology: "".to_string(), core_count: 1, ..Default::default() },
             memory: MemoryProfile { total_bytes: 1024, available_bytes: 512, bandwidth_mbs: 100.0 },
             storage: StorageProfile { io_uring: false, o_direct: false, read_speed_mbs: 10.0, write_speed_mbs: 10.0 },
             gpu: GpuProfile { devices: vec![] },
+            ..Default::default()
         };
         let job_id = "job-uuid-cache";
         insert_job(&conn, job_id, token_id, "project", "ref", &hardware, "2026-05-17T16:53:00Z").unwrap();

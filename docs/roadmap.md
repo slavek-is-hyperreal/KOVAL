@@ -11,7 +11,8 @@ for contribution.
 The core loop works end-to-end:
 
 - **probe** — collects CPU flags, cache topology, memory bandwidth (measured),
-  storage stack (io_uring, O_DIRECT, SSD throughput), GPU via Vulkan/ash
+  storage stack (io_uring, O_DIRECT, SSD throughput), GPU via Vulkan/ash,
+  NUMA topology, CPU base/max frequencies, and kernel version
 - **server** — HTTP API, bounded job queue, async worker, SQLite state,
   bcrypt token auth, sliding-window rate limiting
 - **webhooks** — HMAC-signed POST delivery on job completion or failure
@@ -67,15 +68,11 @@ per runner type — so cached builds would hit reliably.
 
 ### Richer probe measurements
 
-Current probe measures memory bandwidth with a simple copy benchmark.
+Current probe measures memory bandwidth with a simple copy benchmark, NUMA topology, CPU frequencies, and kernel version.
 What would make it substantially more useful:
 
 - **Memory latency** — random-access latency matters more than bandwidth
   for pointer-heavy workloads
-- **NUMA topology** — which cores share which memory controllers
-- **CPU frequency under load** — boost clocks affect the PAR_THRESHOLD
-  calculations in koval.toml rules
-- **Kernel version** — not just io_uring presence, but feature level
 
 ### Incremental builds
 

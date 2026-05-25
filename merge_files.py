@@ -32,8 +32,11 @@ def _dump_branch(folder_path: str, root_dir: str, branch: str,
     """
     Dla podanej gałęzi: generuje parę plików koval_code.txt i koval_docs.txt.
     """
-    code_output_path = os.path.join(root_dir, "koval_code.txt")
-    doc_output_path  = os.path.join(root_dir, "koval_docs.txt")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    code_filename = f"koval_code_{timestamp}.txt"
+    doc_filename = f"koval_docs_{timestamp}.txt"
+    code_output_path = os.path.join(root_dir, code_filename)
+    doc_output_path  = os.path.join(root_dir, doc_filename)
 
     with open(code_output_path, "w", encoding="utf-8") as code_f, \
          open(doc_output_path,  "w", encoding="utf-8") as doc_f:
@@ -74,8 +77,8 @@ def _dump_branch(folder_path: str, root_dir: str, branch: str,
                     except Exception as e:
                         target_f.write(f"\n[ERROR READING {rel_path}: {e}]\n")
 
-    print(f"  [koval/{branch}] -> koval_code.txt")
-    print(f"  [koval/{branch}] -> koval_docs.txt")
+    print(f"  [koval/{branch}] -> {code_filename}")
+    print(f"  [koval/{branch}] -> {doc_filename}")
 
 
 def merge_files():

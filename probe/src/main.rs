@@ -2,6 +2,7 @@ mod cpu;
 mod memory;
 mod storage;
 mod gpu;
+mod numa;
 
 use schema::HardwareProfile;
 
@@ -10,12 +11,14 @@ fn main() {
     let memory = memory::collect();
     let storage = storage::collect();
     let gpu = gpu::collect();
+    let numa = numa::collect();
 
     let profile = HardwareProfile {
         cpu,
         memory,
         storage,
         gpu,
+        numa,
     };
 
     match serde_json::to_string_pretty(&profile) {

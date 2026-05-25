@@ -13,6 +13,11 @@ pub struct ForgeRule {
     pub min_storage_read_mbs: Option<f64>,
     pub min_gpu_vram_gb: Option<f64>,
 
+    pub min_cpu_base_freq_mhz: Option<u64>,
+    pub min_cpu_max_freq_mhz: Option<u64>,
+    pub min_numa_nodes: Option<u32>,
+    pub require_cache_line_size: Option<u64>,
+
     pub rustflags: Option<Vec<String>>,
     pub env: Option<HashMap<String, String>>,
     pub features: Option<Vec<String>>,
@@ -106,6 +111,37 @@ pub fn build_config(hardware: &HardwareProfile, config: &KovalToml) -> BuildConf
             }
         }
 
+        // 9. min_cpu_base_freq_mhz
+        if let Some(min_base) = rule.min_cpu_base_freq_mhz {
+            match hardware.cpu.cpu_base_freq_mhz {
+                Some(freq) if freq >= min_base => {}
+                _ => matched = false,
+            }
+        }
+
+        // 10. min_cpu_max_freq_mhz
+        if let Some(min_max) = rule.min_cpu_max_freq_mhz {
+            match hardware.cpu.cpu_max_freq_mhz {
+                Some(freq) if freq >= min_max => {}
+                _ => matched = false,
+            }
+        }
+
+        // 11. min_numa_nodes
+        if let Some(min_nodes) = rule.min_numa_nodes {
+            if hardware.numa.node_count < min_nodes {
+                matched = false;
+            }
+        }
+
+        // 12. require_cache_line_size
+        if let Some(req_line_size) = rule.require_cache_line_size {
+            match hardware.cpu.cache_line_size {
+                Some(line_size) if line_size == req_line_size => {}
+                _ => matched = false,
+            }
+        }
+
         // Apply rule if matched
         if matched {
             if let Some(ref flags) = rule.rustflags {
@@ -144,6 +180,10 @@ mod tests {
                 flags: vec!["avx2".to_string(), "sse4.1".to_string(), "aes".to_string()],
                 cache_topology: "L1:32KB".to_string(),
                 core_count: 8,
+                cache_line_size: Some(64),
+                cpu_base_freq_mhz: Some(2500),
+                cpu_max_freq_mhz: Some(4200),
+                ..Default::default()
             },
             memory: MemoryProfile {
                 total_bytes: 17179869184, // 16 GB
@@ -162,6 +202,23 @@ mod tests {
                     vram_bytes: 25769803776, // 24 GB
                     pcie_info: None,
                 }],
+            },
+            numa: schema::NumaProfile {
+                node_count: 2,
+                nodes: vec![
+                    schema::NumaNode {
+                        id: 0,
+                        cpu_list: "0-3".to_string(),
+                        memory_mb: 8192,
+                        distances: vec![10, 20],
+                    },
+                    schema::NumaNode {
+                        id: 1,
+                        cpu_list: "4-7".to_string(),
+                        memory_mb: 8192,
+                        distances: vec![20, 10],
+                    },
+                ],
             },
         }
     }
@@ -218,6 +275,7 @@ mod tests {
                 flags: vec![],
                 cache_topology: "".to_string(),
                 core_count: 1,
+                ..Default::default()
             },
             memory: MemoryProfile {
                 total_bytes: 512 * 1024 * 1024, // 512 MB
@@ -231,6 +289,7 @@ mod tests {
                 write_speed_mbs: 10.0,
             },
             gpu: GpuProfile { devices: vec![] }, // Missing GPU
+            ..Default::default()
         };
 
         let config = KovalToml {
@@ -252,5 +311,163 @@ mod tests {
         assert_eq!(build.rustflags, "");
         assert!(build.features.is_empty());
         assert!(build.env.is_empty());
+    }
+
+    #[test]
+    fn test_forge_min_cpu_base_freq_mhz() {
+        let hardware = get_fixture_hardware();
+
+        // Match
+        let config_match = KovalToml {
+            rules: vec![ForgeRule {
+                min_cpu_base_freq_mhz: Some(2000),
+                features: Some(vec!["base-freq-ok".to_string()]),
+                ..Default::default()
+            }],
+        };
+        let build_match = build_config(&hardware, &config_match);
+        assert_eq!(build_match.features, vec!["base-freq-ok".to_string()]);
+
+        // Exclude
+        let config_exclude = KovalToml {
+            rules: vec![ForgeRule {
+                min_cpu_base_freq_mhz: Some(3000),
+                features: Some(vec!["base-freq-ok".to_string()]),
+                ..Default::default()
+            }],
+        };
+        let build_exclude = build_config(&hardware, &config_exclude);
+        assert!(build_exclude.features.is_empty());
+    }
+
+    #[test]
+    fn test_forge_min_cpu_max_freq_mhz() {
+        let hardware = get_fixture_hardware();
+
+        // Match
+        let config_match = KovalToml {
+            rules: vec![ForgeRule {
+                min_cpu_max_freq_mhz: Some(4000),
+                features: Some(vec!["max-freq-ok".to_string()]),
+                ..Default::default()
+            }],
+        };
+        let build_match = build_config(&hardware, &config_match);
+        assert_eq!(build_match.features, vec!["max-freq-ok".to_string()]);
+
+        // Exclude
+        let config_exclude = KovalToml {
+            rules: vec![ForgeRule {
+                min_cpu_max_freq_mhz: Some(5000),
+                features: Some(vec!["max-freq-ok".to_string()]),
+                ..Default::default()
+            }],
+        };
+        let build_exclude = build_config(&hardware, &config_exclude);
+        assert!(build_exclude.features.is_empty());
+    }
+
+    #[test]
+    fn test_forge_min_numa_nodes() {
+        let hardware = get_fixture_hardware();
+
+        // Match
+        let config_match = KovalToml {
+            rules: vec![ForgeRule {
+                min_numa_nodes: Some(2),
+                features: Some(vec!["numa-ok".to_string()]),
+                ..Default::default()
+            }],
+        };
+        let build_match = build_config(&hardware, &config_match);
+        assert_eq!(build_match.features, vec!["numa-ok".to_string()]);
+
+        // Exclude
+        let config_exclude = KovalToml {
+            rules: vec![ForgeRule {
+                min_numa_nodes: Some(3),
+                features: Some(vec!["numa-ok".to_string()]),
+                ..Default::default()
+            }],
+        };
+        let build_exclude = build_config(&hardware, &config_exclude);
+        assert!(build_exclude.features.is_empty());
+    }
+
+    #[test]
+    fn test_forge_require_cache_line_size() {
+        let hardware = get_fixture_hardware();
+
+        // Match
+        let config_match = KovalToml {
+            rules: vec![ForgeRule {
+                require_cache_line_size: Some(64),
+                features: Some(vec!["cache-line-ok".to_string()]),
+                ..Default::default()
+            }],
+        };
+        let build_match = build_config(&hardware, &config_match);
+        assert_eq!(build_match.features, vec!["cache-line-ok".to_string()]);
+
+        // Exclude
+        let config_exclude = KovalToml {
+            rules: vec![ForgeRule {
+                require_cache_line_size: Some(128),
+                features: Some(vec!["cache-line-ok".to_string()]),
+                ..Default::default()
+            }],
+        };
+        let build_exclude = build_config(&hardware, &config_exclude);
+        assert!(build_exclude.features.is_empty());
+    }
+
+    #[test]
+    fn test_forge_backward_compatibility() {
+        // Legacies: new fields on CpuProfile and Numa are default/None
+        let legacy_hardware = HardwareProfile {
+            cpu: CpuProfile {
+                flags: vec!["avx2".to_string()],
+                cache_topology: "".to_string(),
+                core_count: 4,
+                ..Default::default()
+            },
+            memory: MemoryProfile {
+                total_bytes: 8192,
+                available_bytes: 4096,
+                bandwidth_mbs: 1000.0,
+            },
+            storage: StorageProfile {
+                io_uring: false,
+                o_direct: false,
+                read_speed_mbs: 100.0,
+                write_speed_mbs: 100.0,
+            },
+            gpu: GpuProfile { devices: vec![] },
+            ..Default::default()
+        };
+
+        // Rule specifying CPU base frequency should NOT match because legacy is None
+        let config = KovalToml {
+            rules: vec![
+                ForgeRule {
+                    min_cpu_base_freq_mhz: Some(1000),
+                    features: Some(vec!["base-ok".to_string()]),
+                    ..Default::default()
+                },
+                ForgeRule {
+                    min_numa_nodes: Some(1),
+                    features: Some(vec!["numa-ok".to_string()]),
+                    ..Default::default()
+                },
+                ForgeRule {
+                    cpu_flags: Some(vec!["avx2".to_string()]),
+                    features: Some(vec!["avx2-ok".to_string()]),
+                    ..Default::default()
+                }
+            ],
+        };
+
+        let build = build_config(&legacy_hardware, &config);
+        assert_eq!(build.features, vec!["avx2-ok".to_string()]);
     }
 }

@@ -203,3 +203,99 @@ koval config show
   * `create --url <url> --secret <secret>` — Register a new webhook target endpoint with HMAC signing secret.
   * `list` — List registered webhooks for the active token.
   * `delete <id>` — Revoke and deactivate a webhook endpoint by ID.
+
+## 6. Adding a New Cross-Compilation Target
+
+Koval's supported cross-compilation targets are defined in a single file: `server/src/targets.rs`. Adding a new target takes four steps and touches three files.
+
+Before starting, verify that:
+- A GCC cross-linker package for the target exists in the Debian/Ubuntu apt repositories.
+- The Rust target triple is available via `rustup target add <triple>`.
+
+### Step 1: Add the target triple to `targets.rs`
+
+Open `server/src/targets.rs` and add the triple to `SUPPORTED_TARGETS`:
+
+```rust
+pub const SUPPORTED_TARGETS: &[&str] = &[
+    "aarch64-unknown-linux-gnu",
+    "armv7-unknown-linux-gnueabihf",
+    "x86_64-unknown-linux-musl",
+    "your-new-triple-here",   // <-- add here
+];
+```
+
+Then add a branch in `linker_env_for_target` mapping the triple to its linker binary:
+
+```rust
+let linker_bin = match triple {
+    "aarch64-unknown-linux-gnu"     => "aarch64-linux-gnu-gcc",
+    "armv7-unknown-linux-gnueabihf" => "arm-linux-gnueabihf-gcc",
+    "x86_64-unknown-linux-musl"     => "musl-gcc",
+    "your-new-triple-here"          => "the-apt-linker-binary",  // <-- add here
+    _ => return None,
+};
+```
+
+The `CARGO_TARGET_<TRIPLE>_LINKER` environment variable name is derived automatically
+from the triple — you do not need to hardcode it.
+
+Add unit tests for the new triple in the `tests` module at the bottom of the file:
+
+```rust
+#[test]
+fn test_is_supported_your_target() {
+    assert!(is_supported("your-new-triple-here"));
+}
+
+#[test]
+fn test_linker_env_your_target() {
+    let res = linker_env_for_target("your-new-triple-here").unwrap();
+    assert_eq!(res.0, "CARGO_TARGET_YOUR_NEW_TRIPLE_HERE_LINKER");
+    assert_eq!(res.1, "the-apt-linker-binary");
+}
+```
+
+### Step 2: Install the toolchain in `Dockerfile`
+
+Open `Dockerfile` and add the apt package to the runtime stage's install block:
+
+```dockerfile
+RUN apt-get update && apt-get install -y \
+    ...
+    the-apt-package-name \       # <-- add cross-linker package
+    && rm -rf /var/lib/apt/lists/*
+
+RUN rustup target add aarch64-unknown-linux-gnu \
+    && rustup target add armv7-unknown-linux-gnueabihf \
+    && rustup target add x86_64-unknown-linux-musl \
+    && rustup target add your-new-triple-here    # <-- add here
+```
+
+### Step 3: Mirror the change in `Dockerfile.test`
+
+`Dockerfile.test` must match the production environment exactly.
+Add the same apt package and `rustup target add` line to `Dockerfile.test`.
+
+If the toolchain is missing from the test image, cross-compilation integration
+tests will pass locally but fail in CI with a linker-not-found error at runtime.
+
+### Step 4: Run the test suite
+
+```bash
+docker compose -f docker-compose.test.yml up --build --abort-on-container-exit
+```
+
+All existing tests must still pass. The new target appears automatically in
+the `400 Bad Request` validation path — no route changes are needed.
+
+---
+
+### Reference: currently supported targets
+
+| Target triple | Architecture | Use case | Linker package |
+|---|---|---|---|
+| `aarch64-unknown-linux-gnu` | ARM64 | Raspberry Pi 4, AWS Graviton, Apple Silicon servers | `gcc-aarch64-linux-gnu` |
+| `armv7-unknown-linux-gnueabihf` | ARM32 | Raspberry Pi OS 32-bit, embedded ARM | `gcc-arm-linux-gnueabihf` |
+| `x86_64-unknown-linux-musl` | x86_64 musl | Static binaries, Alpine containers | `musl-tools` |
+| *(none)* | native | Build box architecture | *(no cross-linker needed)* |

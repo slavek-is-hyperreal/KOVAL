@@ -66,6 +66,7 @@ mod tests {
                 flags: vec![],
                 cache_topology: "".to_string(),
                 core_count: 2,
+                ..Default::default()
             },
             memory: MemoryProfile {
                 total_bytes: 4096,
@@ -79,6 +80,7 @@ mod tests {
                 write_speed_mbs: 50.0,
             },
             gpu: GpuProfile { devices: vec![] },
+            ..Default::default()
         }
     }
 

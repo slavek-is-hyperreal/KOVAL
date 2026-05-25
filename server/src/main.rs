@@ -389,6 +389,7 @@ mod tests {
                     flags: vec!["avx2".to_string()],
                     cache_topology: "L1:32KB".to_string(),
                     core_count: 4,
+                    ..Default::default()
                 },
                 memory: schema::MemoryProfile {
                     total_bytes: 8589934592,
@@ -402,6 +403,7 @@ mod tests {
                     write_speed_mbs: 400.0,
                 },
                 gpu: schema::GpuProfile { devices: vec![] },
+                ..Default::default()
             };
             let hw_str = serde_json::to_string(&hardware).unwrap();
             let cache_key = crate::cache::compute_cache_key(&hw_str, "https://github.com/example/cachetest", "v1.1", None, None, None);
@@ -575,6 +577,7 @@ mod tests {
                     flags: vec!["avx2".to_string()],
                     cache_topology: "L1:32KB".to_string(),
                     core_count: 4,
+                    ..Default::default()
                 },
                 memory: schema::MemoryProfile {
                     total_bytes: 8589934592,
@@ -588,6 +591,7 @@ mod tests {
                     write_speed_mbs: 400.0,
                 },
                 gpu: schema::GpuProfile { devices: vec![] },
+                ..Default::default()
             };
             let hw_str = serde_json::to_string(&hardware).unwrap();
             let cache_key = crate::cache::compute_cache_key(&hw_str, "https://github.com/example/cachepkg", "v2.0", None, Some("core"), None);
