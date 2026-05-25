@@ -129,6 +129,7 @@ Content-Type: application/json
   "project": "https://github.com/you/my-project",
   "git_ref": "main",
   "binary": "server", // Optional: specify target binary (otherwise builds root package/workspace)
+  "target": "aarch64-unknown-linux-gnu", // Optional: specify cross-compilation target triple
   "hardware": { ...probe output... }
 }
 ```
@@ -259,6 +260,7 @@ Early development. Build server, agent pipelines, build caching, and webhook eve
 **Core features implemented:**
 - **Build cache**: Remembers compiled output for the exact same hardware profile, Git ref, and binary target, and skips compilation if the compiled artifact still exists on disk.
 - **Webhook notifications**: Automatically sends a signed HMAC-SHA256 event notification to registered endpoints when a build transitions to `done` or `failed`.
+- **Cross-compilation**: Supports compiling to `aarch64-unknown-linux-gnu`, `armv7-unknown-linux-gnueabihf`, and `x86_64-unknown-linux-musl` target architectures.
 
 ---
 

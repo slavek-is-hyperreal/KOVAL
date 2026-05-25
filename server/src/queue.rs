@@ -10,6 +10,7 @@ pub struct Job {
     pub hardware: HardwareProfile,
     pub binary: Option<String>,
     pub package: Option<String>,
+    pub target: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -94,6 +95,7 @@ mod tests {
             hardware: get_dummy_hardware(),
             binary: None,
             package: None,
+            target: None,
         };
 
         let job2 = Job {
@@ -104,6 +106,7 @@ mod tests {
             hardware: get_dummy_hardware(),
             binary: None,
             package: None,
+            target: None,
         };
 
         let job3 = Job {
@@ -114,6 +117,7 @@ mod tests {
             hardware: get_dummy_hardware(),
             binary: None,
             package: None,
+            target: None,
         };
 
         // 1. Queueing returns correct ID
@@ -137,6 +141,7 @@ mod tests {
             hardware: get_dummy_hardware(),
             binary: None,
             package: None,
+            target: None,
         };
         assert_eq!(queue.enqueue(job3_retry).unwrap(), "job-3");
 

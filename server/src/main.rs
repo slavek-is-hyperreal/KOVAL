@@ -14,6 +14,7 @@ pub mod routes;
 pub mod webhook;
 pub mod worker;
 pub mod cache;
+pub mod targets;
 
 use crate::queue::JobQueue;
 use crate::routes::AppState;
@@ -403,7 +404,7 @@ mod tests {
                 gpu: schema::GpuProfile { devices: vec![] },
             };
             let hw_str = serde_json::to_string(&hardware).unwrap();
-            let cache_key = crate::cache::compute_cache_key(&hw_str, "https://github.com/example/cachetest", "v1.1", None, None);
+            let cache_key = crate::cache::compute_cache_key(&hw_str, "https://github.com/example/cachetest", "v1.1", None, None, None);
             db::insert_cache_entry(&conn, &cache_key, &job_id1, "2026-05-17T17:00:00Z").unwrap();
         }
 
@@ -589,7 +590,7 @@ mod tests {
                 gpu: schema::GpuProfile { devices: vec![] },
             };
             let hw_str = serde_json::to_string(&hardware).unwrap();
-            let cache_key = crate::cache::compute_cache_key(&hw_str, "https://github.com/example/cachepkg", "v2.0", None, Some("core"));
+            let cache_key = crate::cache::compute_cache_key(&hw_str, "https://github.com/example/cachepkg", "v2.0", None, Some("core"), None);
             db::insert_cache_entry(&conn, &cache_key, &job_id1, "2026-05-17T17:00:00Z").unwrap();
         }
 
@@ -609,5 +610,97 @@ mod tests {
 
         assert_eq!(job_id1, job_id2); // CACHE HIT!
         std::fs::remove_file(&dummy_archive).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_build_target_validation() {
+        let (app, _conn, _queue, _rx) = build_test_router();
+
+        // 14. target: None -> returns 202
+        let payload_none = r#"{
+            "project": "https://github.com/example/target_none",
+            "git_ref": "v1.0",
+            "hardware": {
+                "cpu": {"flags": ["avx2"], "cache_topology": "L1:32KB", "core_count": 4},
+                "memory": {"total_bytes": 8589934592, "available_bytes": 4294967296, "bandwidth_mbs": 12000.0},
+                "storage": {"io_uring": false, "o_direct": true, "read_speed_mbs": 450.0, "write_speed_mbs": 400.0},
+                "gpu": {"devices": []}
+            }
+        }"#;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/build")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::from(payload_none))
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::ACCEPTED);
+
+        // 15. target: Some("aarch64-unknown-linux-gnu") -> returns 202
+        let payload_valid = r#"{
+            "project": "https://github.com/example/target_valid",
+            "git_ref": "v1.0",
+            "target": "aarch64-unknown-linux-gnu",
+            "hardware": {
+                "cpu": {"flags": ["avx2"], "cache_topology": "L1:32KB", "core_count": 4},
+                "memory": {"total_bytes": 8589934592, "available_bytes": 4294967296, "bandwidth_mbs": 12000.0},
+                "storage": {"io_uring": false, "o_direct": true, "read_speed_mbs": 450.0, "write_speed_mbs": 400.0},
+                "gpu": {"devices": []}
+            }
+        }"#;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/build")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::from(payload_valid))
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::ACCEPTED);
+
+        // 16. target: Some("unsupported-target") -> returns 400
+        let payload_invalid = r#"{
+            "project": "https://github.com/example/target_invalid",
+            "git_ref": "v1.0",
+            "target": "unsupported-target",
+            "hardware": {
+                "cpu": {"flags": ["avx2"], "cache_topology": "L1:32KB", "core_count": 4},
+                "memory": {"total_bytes": 8589934592, "available_bytes": 4294967296, "bandwidth_mbs": 12000.0},
+                "storage": {"io_uring": false, "o_direct": true, "read_speed_mbs": 450.0, "write_speed_mbs": 400.0},
+                "gpu": {"devices": []}
+            }
+        }"#;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/build")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::from(payload_invalid))
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+        // 17. target: Some("") -> returns 400
+        let payload_empty = r#"{
+            "project": "https://github.com/example/target_empty",
+            "git_ref": "v1.0",
+            "target": "",
+            "hardware": {
+                "cpu": {"flags": ["avx2"], "cache_topology": "L1:32KB", "core_count": 4},
+                "memory": {"total_bytes": 8589934592, "available_bytes": 4294967296, "bandwidth_mbs": 12000.0},
+                "storage": {"io_uring": false, "o_direct": true, "read_speed_mbs": 450.0, "write_speed_mbs": 400.0},
+                "gpu": {"devices": []}
+            }
+        }"#;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/build")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::from(payload_empty))
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
     }
 }

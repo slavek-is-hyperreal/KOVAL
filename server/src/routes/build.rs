@@ -42,6 +42,13 @@ pub async fn build_handler(
         }
     };
 
+    // 1.5. Validate compilation target if provided
+    if let Some(ref t) = payload.target {
+        if !crate::targets::is_supported(t) {
+            return (StatusCode::BAD_REQUEST, "Unsupported compilation target").into_response();
+        }
+    }
+
     // 2. Gather hardware profile using target probe binary (from target device payload)
     let hardware = payload.hardware.clone();
 
@@ -53,6 +60,7 @@ pub async fn build_handler(
         &payload.git_ref,
         payload.binary.as_deref(),
         payload.package.as_deref(),
+        payload.target.as_deref(),
     );
 
     let mut cache_hit = false;
@@ -90,6 +98,7 @@ pub async fn build_handler(
         hardware,
         binary: payload.binary.clone(),
         package: payload.package.clone(),
+        target: payload.target.clone(),
     };
 
     // 5. Save job state in database

@@ -18,6 +18,7 @@ The core loop works end-to-end:
 - **token management** — create/list/revoke via API and CLI
 - **job history** — GET /jobs, browser UI at GET /ui
 - **koval CLI** — config, token, job, webhook subcommands
+- **cross-compilation** — support for compiling to `aarch64-unknown-linux-gnu`, `armv7-unknown-linux-gnueabihf`, and `x86_64-unknown-linux-musl` target architectures.
 
 What it cannot do yet is listed below.
 
@@ -56,19 +57,6 @@ Includes the Rust toolchain, configurable target architectures via
 self-hosting.
 
 ---
-
-## Medium term — things that expand what Koval can do
-
-### Cross-compilation
-
-Build for a different architecture than the build box.
-Probe collects the target's hardware profile. Server cross-compiles
-using the appropriate `--target` triple and `rustup target add`.
-Primary use case: build for ARM on an x86 build box.
-
-The tricky part is toolchain management — the server needs the right
-linker for each target. Probably solved with a configurable
-`[targets]` section in a server-side config.
 
 ### GitHub Actions integration
 

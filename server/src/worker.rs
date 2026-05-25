@@ -161,39 +161,17 @@ fn process_job(
     };
 
     // 6. Run Cargo Build compilation based on build mode
-    let mut cargo_args = vec!["build", "--release"];
-    match &build_mode {
-        BuildMode::Workspace => {
-            cargo_args.push("--workspace");
-        }
-        BuildMode::PackageInWorkspace(pkg) => {
-            cargo_args.push("-p");
-            cargo_args.push(pkg);
-        }
-        BuildMode::SpecificBinary(name) => {
-            cargo_args.push("--bin");
-            cargo_args.push(name);
-        }
-        BuildMode::MultiBin | BuildMode::SinglePackage(_) => {
-            // default build
-        }
-    }
-
-    // Add custom features if any are matched
     let features_joined = build_config.features.join(",");
-    if !build_config.features.is_empty() {
-        cargo_args.push("--features");
-        cargo_args.push(&features_joined);
-    }
-
-    // Prepare cargo process environment
-    let mut envs: HashMap<String, String> = build_config.env.clone();
-    if !build_config.rustflags.is_empty() {
-        envs.insert("RUSTFLAGS".to_string(), build_config.rustflags.clone());
-    }
+    let cargo_args = prepare_cargo_args(
+        &build_mode,
+        &build_config.features,
+        &features_joined,
+        job.target.as_deref(),
+    );
+    let envs = prepare_cargo_envs(&build_config.env, &build_config.rustflags, job.target.as_deref());
 
     let build_output = Command::new("cargo")
-        .args(cargo_args)
+        .args(&cargo_args)
         .envs(&envs)
         .current_dir(&build_dir)
         .output();
@@ -212,7 +190,10 @@ fn process_job(
         // 7. Find binaries and compress into tar.gz
         let archive_filename = format!("{}.tar.gz", job.id);
         let archive_path = artifacts_dir.join(&archive_filename);
-        let release_dir = build_dir.join("target").join("release");
+        let release_dir = match &job.target {
+            Some(t) => build_dir.join("target").join(t).join("release"),
+            None => build_dir.join("target").join("release"),
+        };
 
         match &build_mode {
             BuildMode::Workspace | BuildMode::PackageInWorkspace(_) | BuildMode::MultiBin => {
@@ -254,7 +235,7 @@ fn process_job(
                 }
 
                 if binaries.is_empty() {
-                    return fail_job("Build succeeded but no executable binaries found in target/release/");
+                    return fail_job(&format!("Build succeeded but no executable binaries found in release directory: {}", release_dir.display()));
                 }
 
                 // Compress workspace binaries using local tar utility
@@ -292,8 +273,8 @@ fn process_job(
                 let binary_path = release_dir.join(name);
                 if !binary_path.exists() {
                     return fail_job(&format!(
-                        "Cargo succeeded but binary not found at target/release/{}",
-                        name
+                        "Cargo succeeded but binary not found at {}",
+                        binary_path.display()
                     ));
                 }
 
@@ -342,6 +323,7 @@ fn process_job(
             &job.git_ref,
             job.binary.as_deref(),
             job.package.as_deref(),
+            job.target.as_deref(),
         );
 
         {
@@ -428,6 +410,60 @@ pub fn detect_build_mode(
     } else {
         Err("Cargo.toml has neither a [package] nor a root [workspace] section".to_string())
     }
+}
+
+pub fn prepare_cargo_args<'a>(
+    build_mode: &'a BuildMode,
+    features: &'a [String],
+    features_joined: &'a str,
+    target: Option<&'a str>,
+) -> Vec<&'a str> {
+    let mut cargo_args = vec!["build", "--release"];
+    match build_mode {
+        BuildMode::Workspace => {
+            cargo_args.push("--workspace");
+        }
+        BuildMode::PackageInWorkspace(pkg) => {
+            cargo_args.push("-p");
+            cargo_args.push(pkg);
+        }
+        BuildMode::SpecificBinary(name) => {
+            cargo_args.push("--bin");
+            cargo_args.push(name);
+        }
+        BuildMode::MultiBin | BuildMode::SinglePackage(_) => {
+            // default build
+        }
+    }
+
+    if !features.is_empty() {
+        cargo_args.push("--features");
+        cargo_args.push(features_joined);
+    }
+
+    if let Some(t) = target {
+        cargo_args.push("--target");
+        cargo_args.push(t);
+    }
+
+    cargo_args
+}
+
+pub fn prepare_cargo_envs(
+    base_envs: &HashMap<String, String>,
+    rustflags: &str,
+    target: Option<&str>,
+) -> HashMap<String, String> {
+    let mut envs = base_envs.clone();
+    if !rustflags.is_empty() {
+        envs.insert("RUSTFLAGS".to_string(), rustflags.to_string());
+    }
+    if let Some(t) = target {
+        if let Some((env_var, linker_bin)) = crate::targets::linker_env_for_target(t) {
+            envs.insert(env_var, linker_bin);
+        }
+    }
+    envs
 }
 
 #[cfg(test)]
@@ -557,5 +593,31 @@ mod tests {
         "#;
         let mode = detect_build_mode(toml, None, None).unwrap();
         assert_eq!(mode, BuildMode::MultiBin);
+    }
+
+    #[test]
+    fn test_cargo_prepare_target() {
+        // Test argument preparation with target
+        let mode = BuildMode::Workspace;
+        let features = vec!["feat1".to_string()];
+        let feat_str = "feat1";
+        let args = prepare_cargo_args(&mode, &features, feat_str, Some("aarch64-unknown-linux-gnu"));
+        assert_eq!(args, vec!["build", "--release", "--workspace", "--features", "feat1", "--target", "aarch64-unknown-linux-gnu"]);
+
+        // Test argument preparation without target
+        let args_no_target = prepare_cargo_args(&mode, &features, feat_str, None);
+        assert_eq!(args_no_target, vec!["build", "--release", "--workspace", "--features", "feat1"]);
+
+        // Test environment preparation with target
+        let mut base_envs = HashMap::new();
+        base_envs.insert("SOME_VAR".to_string(), "val".to_string());
+        let envs = prepare_cargo_envs(&base_envs, "-C target-feature=+avx2", Some("aarch64-unknown-linux-gnu"));
+        assert_eq!(envs.get("SOME_VAR").unwrap(), "val");
+        assert_eq!(envs.get("RUSTFLAGS").unwrap(), "-C target-feature=+avx2");
+        assert_eq!(envs.get("CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER").unwrap(), "aarch64-linux-gnu-gcc");
+
+        // Test environment preparation without target
+        let envs_no_target = prepare_cargo_envs(&base_envs, "-C target-feature=+avx2", None);
+        assert_eq!(envs_no_target.get("CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER"), None);
     }
 }

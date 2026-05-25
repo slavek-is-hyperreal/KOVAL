@@ -16,13 +16,21 @@ RUN cargo build --release -p server
 # ==========================================
 FROM rust:latest AS runtime
 
-# Install system dependencies needed for runtime git-cloning, packaging, and database management
+# Install system dependencies needed for runtime git-cloning, packaging, database management, and cross-compilation
 RUN apt-get update && apt-get install -y \
     sqlite3 \
     libsqlite3-dev \
     git \
     tar \
+    gcc-aarch64-linux-gnu \
+    gcc-arm-linux-gnueabihf \
+    musl-tools \
     && rm -rf /var/lib/apt/lists/*
+
+# Add rustup targets for cross-compilation
+RUN rustup target add aarch64-unknown-linux-gnu \
+    && rustup target add armv7-unknown-linux-gnueabihf \
+    && rustup target add x86_64-unknown-linux-musl
 
 # Set working directory for the application executable
 WORKDIR /koval

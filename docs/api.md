@@ -62,6 +62,11 @@ Triggers a new background compilation job using a target hardware profile suppli
 - **git_ref** (String, Required): Branch, tag, or exact commit hash to check out (e.g. `"main"`).
 - **package** (String, Optional): The name of a specific package in the workspace to compile (e.g. `"server"`). If omitted or `null`, Koval compiles the workspace as a whole or uses the root package.
 - **binary** (String, Optional): The name of a specific binary target to compile (e.g. `"server"`). If omitted or `null`, Koval automatically builds the target package, or all workspace/package binaries if not specified.
+- **target** (String, Optional): The cross-compilation target triple. Supported triples are:
+  - `aarch64-unknown-linux-gnu`
+  - `armv7-unknown-linux-gnueabihf`
+  - `x86_64-unknown-linux-musl`
+  If omitted or `null`, Koval compiles natively for the host architecture.
 
 #### Response Schema
 - **202 Accepted**: The job is successfully authenticated, saved to SQLite, and pushed into the build queue.
