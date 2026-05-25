@@ -126,17 +126,7 @@ substantial on top of PGO.
 
 ### GPU-accelerated LLVM passes
 
-Speculative. The analysis lives in a separate research note — add it to `docs/gpu_compilation_research.md` if you want to track it in the repo. The short
-analysis. The short version: LLVM optimization passes are graph
-algorithms. GPU is fast at graph algorithms. Batching thousands of
-functions across a large compilation workload may amortize the GPU
-dispatch overhead enough to matter.
-
-Nobody has shipped this. The research question is whether irregular
-small-graph structure kills the GPU advantage regardless of batch size.
-Koval is the natural place to test the hypothesis once the core
-toolchain is stable — it already controls the full compilation pipeline
-and knows the target GPU from the hardware profile.
+This is speculative. The detailed hypothesis and research protocol for this concept are parked in [ideas/gpu_compilation_research.md](file:///my_data/KOVAL/ideas/gpu_compilation_research.md).
 
 ---
 

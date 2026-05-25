@@ -403,7 +403,7 @@ mod tests {
                 gpu: schema::GpuProfile { devices: vec![] },
             };
             let hw_str = serde_json::to_string(&hardware).unwrap();
-            let cache_key = crate::cache::compute_cache_key(&hw_str, "https://github.com/example/cachetest", "v1.1", None);
+            let cache_key = crate::cache::compute_cache_key(&hw_str, "https://github.com/example/cachetest", "v1.1", None, None);
             db::insert_cache_entry(&conn, &cache_key, &job_id1, "2026-05-17T17:00:00Z").unwrap();
         }
 
@@ -444,5 +444,170 @@ mod tests {
         let job_id3 = body_json3["id"].as_str().unwrap().to_string();
 
         assert_ne!(job_id1, job_id3); // CACHE MISS (file deleted)!
+    }
+
+    #[tokio::test]
+    async fn test_integration_package_routes() {
+        let (app, conn_mutex, _queue, _rx) = build_test_router();
+
+        // 22. POST /build without package field -> 202 (backward compatible)
+        let payload_no_pkg = r#"{
+            "project": "https://github.com/example/testproj",
+            "git_ref": "main",
+            "hardware": {
+                "cpu": {"flags": ["avx2"], "cache_topology": "L1:32KB", "core_count": 4},
+                "memory": {"total_bytes": 8589934592, "available_bytes": 4294967296, "bandwidth_mbs": 12000.0},
+                "storage": {"io_uring": false, "o_direct": true, "read_speed_mbs": 450.0, "write_speed_mbs": 400.0},
+                "gpu": {"devices": []}
+            }
+        }"#;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/build")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::from(payload_no_pkg))
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::ACCEPTED);
+
+        // 23. POST /build with "package": "server" -> 202, job_id returned
+        let payload_with_pkg = r#"{
+            "project": "https://github.com/example/testproj",
+            "git_ref": "main",
+            "package": "server",
+            "hardware": {
+                "cpu": {"flags": ["avx2"], "cache_topology": "L1:32KB", "core_count": 4},
+                "memory": {"total_bytes": 8589934592, "available_bytes": 4294967296, "bandwidth_mbs": 12000.0},
+                "storage": {"io_uring": false, "o_direct": true, "read_speed_mbs": 450.0, "write_speed_mbs": 400.0},
+                "gpu": {"devices": []}
+            }
+        }"#;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/build")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::from(payload_with_pkg))
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::ACCEPTED);
+        let body_bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let body_json: Value = serde_json::from_slice(&body_bytes).unwrap();
+        let job_id = body_json["id"].as_str().expect("ID must be string");
+        assert!(!job_id.is_empty());
+
+        // 24. POST /build with "binary": "probe" and "package": "cli" -> 202 (both accepted)
+        let payload_both = r#"{
+            "project": "https://github.com/example/testproj",
+            "git_ref": "main",
+            "binary": "probe",
+            "package": "cli",
+            "hardware": {
+                "cpu": {"flags": ["avx2"], "cache_topology": "L1:32KB", "core_count": 4},
+                "memory": {"total_bytes": 8589934592, "available_bytes": 4294967296, "bandwidth_mbs": 12000.0},
+                "storage": {"io_uring": false, "o_direct": true, "read_speed_mbs": 450.0, "write_speed_mbs": 400.0},
+                "gpu": {"devices": []}
+            }
+        }"#;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/build")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::from(payload_both))
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::ACCEPTED);
+
+        // 25. POST /build with invalid token -> 401
+        let req = Request::builder()
+            .method("POST")
+            .uri("/build")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer invalid_token")
+            .body(Body::from(payload_with_pkg))
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+        // 26. Two identical POST /build requests (same hardware, project, git_ref, binary, package) -> cache hit
+        let payload_cache = r#"{
+            "project": "https://github.com/example/cachepkg",
+            "git_ref": "v2.0",
+            "package": "core",
+            "hardware": {
+                "cpu": {"flags": ["avx2"], "cache_topology": "L1:32KB", "core_count": 4},
+                "memory": {"total_bytes": 8589934592, "available_bytes": 4294967296, "bandwidth_mbs": 12000.0},
+                "storage": {"io_uring": false, "o_direct": true, "read_speed_mbs": 450.0, "write_speed_mbs": 400.0},
+                "gpu": {"devices": []}
+            }
+        }"#;
+
+        let req1 = Request::builder()
+            .method("POST")
+            .uri("/build")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::from(payload_cache))
+            .unwrap();
+        let res1 = app.clone().oneshot(req1).await.unwrap();
+        assert_eq!(res1.status(), StatusCode::ACCEPTED);
+        let bytes1 = axum::body::to_bytes(res1.into_body(), usize::MAX).await.unwrap();
+        let json1: Value = serde_json::from_slice(&bytes1).unwrap();
+        let job_id1 = json1["id"].as_str().unwrap().to_string();
+
+        // Create the temp archive to simulate build success
+        let temp_dir = std::env::temp_dir().join("artifacts");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let dummy_archive = temp_dir.join(format!("{}.tar.gz", job_id1));
+        std::fs::write(&dummy_archive, b"dummy compiled binaries content").unwrap();
+
+        // Register done state and artifact in DB, and cache entry
+        {
+            let conn = conn_mutex.lock().unwrap();
+            db::update_job_status(&conn, &job_id1, "done", None, Some("2026-05-17T17:00:00Z"), None).unwrap();
+            db::insert_artifact(&conn, &job_id1, &dummy_archive.to_string_lossy(), 100, "dummysha").unwrap();
+
+            let hardware = schema::HardwareProfile {
+                cpu: schema::CpuProfile {
+                    flags: vec!["avx2".to_string()],
+                    cache_topology: "L1:32KB".to_string(),
+                    core_count: 4,
+                },
+                memory: schema::MemoryProfile {
+                    total_bytes: 8589934592,
+                    available_bytes: 4294967296,
+                    bandwidth_mbs: 12000.0,
+                },
+                storage: schema::StorageProfile {
+                    io_uring: false,
+                    o_direct: true,
+                    read_speed_mbs: 450.0,
+                    write_speed_mbs: 400.0,
+                },
+                gpu: schema::GpuProfile { devices: vec![] },
+            };
+            let hw_str = serde_json::to_string(&hardware).unwrap();
+            let cache_key = crate::cache::compute_cache_key(&hw_str, "https://github.com/example/cachepkg", "v2.0", None, Some("core"));
+            db::insert_cache_entry(&conn, &cache_key, &job_id1, "2026-05-17T17:00:00Z").unwrap();
+        }
+
+        // Send second identical request -> cache hit
+        let req2 = Request::builder()
+            .method("POST")
+            .uri("/build")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::from(payload_cache))
+            .unwrap();
+        let res2 = app.clone().oneshot(req2).await.unwrap();
+        assert_eq!(res2.status(), StatusCode::ACCEPTED);
+        let bytes2 = axum::body::to_bytes(res2.into_body(), usize::MAX).await.unwrap();
+        let json2: Value = serde_json::from_slice(&bytes2).unwrap();
+        let job_id2 = json2["id"].as_str().unwrap().to_string();
+
+        assert_eq!(job_id1, job_id2); // CACHE HIT!
+        std::fs::remove_file(&dummy_archive).unwrap();
     }
 }

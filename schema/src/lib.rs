@@ -49,6 +49,8 @@ pub struct JobRequest {
     pub git_ref: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub binary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -188,6 +190,7 @@ mod tests {
             project: "https://github.com/example/project.git".to_string(),
             git_ref: "main".to_string(),
             binary: None,
+            package: None,
         };
 
         let serialized = serde_json::to_string(&request).expect("Failed to serialize JobRequest");
@@ -224,6 +227,7 @@ mod tests {
             project: "myproj".to_string(),
             git_ref: "main".to_string(),
             binary: None,
+            package: None,
         };
         let serialized_none = serde_json::to_string(&req_none).unwrap();
         assert!(!serialized_none.contains("\"binary\""));
@@ -234,6 +238,7 @@ mod tests {
             project: "myproj".to_string(),
             git_ref: "main".to_string(),
             binary: Some("server".to_string()),
+            package: None,
         };
         let serialized_some = serde_json::to_string(&req_some).unwrap();
         assert!(serialized_some.contains("\"binary\":\"server\""));
@@ -251,7 +256,80 @@ mod tests {
         }"#;
         let deserialized: JobRequest = serde_json::from_str(old_json).unwrap();
         assert_eq!(deserialized.binary, None);
+        assert_eq!(deserialized.package, None);
         assert_eq!(deserialized.project, "myproj");
+    }
+
+    #[test]
+    fn test_job_request_package_field_serialization() {
+        let profile = HardwareProfile {
+            cpu: CpuProfile {
+                flags: vec![],
+                cache_topology: "".to_string(),
+                core_count: 4,
+            },
+            memory: MemoryProfile {
+                total_bytes: 8589934592,
+                available_bytes: 4294967296,
+                bandwidth_mbs: 12000.0,
+            },
+            storage: StorageProfile {
+                io_uring: false,
+                o_direct: false,
+                read_speed_mbs: 500.0,
+                write_speed_mbs: 450.0,
+            },
+            gpu: GpuProfile { devices: vec![] },
+        };
+
+        // 1. package: None serializes without "package" key in JSON
+        let req_none = JobRequest {
+            hardware: profile.clone(),
+            project: "myproj".to_string(),
+            git_ref: "main".to_string(),
+            binary: Some("server".to_string()),
+            package: None,
+        };
+        let serialized_none = serde_json::to_string(&req_none).unwrap();
+        assert!(!serialized_none.contains("\"package\""));
+
+        // 2. package: Some("server") serializes with "package":"server"
+        let req_some = JobRequest {
+            hardware: profile.clone(),
+            project: "myproj".to_string(),
+            git_ref: "main".to_string(),
+            binary: None,
+            package: Some("server".to_string()),
+        };
+        let serialized_some = serde_json::to_string(&req_some).unwrap();
+        assert!(serialized_some.contains("\"package\":\"server\""));
+
+        // 3. Old JSON without "package" key deserializes to package: None
+        let old_json = r#"{
+            "project": "myproj",
+            "git_ref": "main",
+            "hardware": {
+                "cpu": {"flags":[], "cache_topology":"", "core_count":4},
+                "memory": {"total_bytes":8589934592, "available_bytes":4294967296, "bandwidth_mbs":12000.0},
+                "storage": {"io_uring":false, "o_direct":false, "read_speed_mbs":500.0, "write_speed_mbs":450.0},
+                "gpu": {"devices":[]}
+            }
+        }"#;
+        let deserialized: JobRequest = serde_json::from_str(old_json).unwrap();
+        assert_eq!(deserialized.package, None);
+        assert_eq!(deserialized.binary, None);
+
+        // 4. package: None and binary: None both absent -> both fields missing
+        let req_both_none = JobRequest {
+            hardware: profile.clone(),
+            project: "myproj".to_string(),
+            git_ref: "main".to_string(),
+            binary: None,
+            package: None,
+        };
+        let serialized_both_none = serde_json::to_string(&req_both_none).unwrap();
+        assert!(!serialized_both_none.contains("\"binary\""));
+        assert!(!serialized_both_none.contains("\"package\""));
     }
 
     #[test]

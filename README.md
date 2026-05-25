@@ -34,8 +34,7 @@ koval-probe                        │  POST /build                │
     · Storage stack                │    → optimized binary       │
       (io_uring support,           └─────────────────────────────┘
        O_DIRECT, SSD bandwidth)
-    · GPU (Vulkan device props,
-       VRAM, PCIe link)
+    · GPU (Vulkan device props, VRAM, PCIe link)
 
   → POST to Koval server
   → poll status

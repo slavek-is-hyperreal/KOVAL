@@ -5,11 +5,25 @@ use std::time::Instant;
 use std::alloc::{alloc, dealloc, Layout};
 use schema::StorageProfile;
 
+fn detect_io_uring_internal<F1, F2>(sys_path_exists: F1, read_proc_file: F2) -> bool
+where
+    F1: Fn(&str) -> bool,
+    F2: Fn(&str) -> Option<String>,
+{
+    if !sys_path_exists("/sys/module/io_uring") {
+        return false;
+    }
+    match read_proc_file("/proc/sys/kernel/io_uring_disabled") {
+        Some(content) => content.trim() == "0",
+        None => true,
+    }
+}
+
 pub fn collect() -> StorageProfile {
-    let io_uring = fs::metadata("/sys/module/io_uring").is_ok()
-        || fs::read_to_string("/proc/sys/kernel/io_uring_disabled")
-            .map(|s| s.trim() == "0")
-            .unwrap_or(false);
+    let io_uring = detect_io_uring_internal(
+        |path| fs::metadata(path).is_ok(),
+        |path| fs::read_to_string(path).ok(),
+    );
     let o_direct = test_o_direct_support();
     let (read_speed_mbs, write_speed_mbs) = run_disk_benchmark(o_direct);
 
@@ -124,4 +138,36 @@ fn run_disk_benchmark(use_o_direct: bool) -> (f64, f64) {
     let read_speed = if read_elapsed > 0.0 { size_mb / read_elapsed } else { 0.0 };
 
     (read_speed, write_speed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_io_uring_detection_disabled() {
+        // Test 19: sysfs exists but disabled in proc (value "1" or "2")
+        let sys_exists = |_: &str| true;
+        let proc_val_1 = |_: &str| Some("1\n".to_string());
+        let proc_val_2 = |_: &str| Some("2".to_string());
+
+        assert!(!detect_io_uring_internal(sys_exists, proc_val_1));
+        assert!(!detect_io_uring_internal(sys_exists, proc_val_2));
+    }
+
+    #[test]
+    fn test_io_uring_detection_enabled() {
+        // Test 20: sysfs exists, proc has "0" or is missing
+        let sys_exists = |_: &str| true;
+        let proc_val_0 = |_: &str| Some(" 0 \n".to_string());
+        let proc_missing = |_: &str| None;
+
+        assert!(detect_io_uring_internal(sys_exists, proc_val_0));
+        assert!(detect_io_uring_internal(sys_exists, proc_missing));
+
+        // Also if sysfs is missing, should always be false
+        let sys_missing = |_: &str| false;
+        assert!(!detect_io_uring_internal(sys_missing, proc_val_0));
+        assert!(!detect_io_uring_internal(sys_missing, proc_missing));
+    }
 }

@@ -52,6 +52,7 @@ pub async fn build_handler(
         &payload.project,
         &payload.git_ref,
         payload.binary.as_deref(),
+        payload.package.as_deref(),
     );
 
     let mut cache_hit = false;
@@ -88,6 +89,7 @@ pub async fn build_handler(
         git_ref: payload.git_ref.clone(),
         hardware,
         binary: payload.binary.clone(),
+        package: payload.package.clone(),
     };
 
     // 5. Save job state in database

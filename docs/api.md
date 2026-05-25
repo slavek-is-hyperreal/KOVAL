@@ -21,7 +21,7 @@ To ensure fair resource sharing, the API enforces a sliding-window rate limit (t
 
 ### Build Caching
 To optimize delivery and avoid redundant CPU resource consumption, Koval automatically caches successful build artifacts:
-- **Cache Key**: A deterministic SHA-256 hash computed from the target `hardware` profile, `project` git URL, `git_ref` revision, and optional `binary` target name.
+- **Cache Key**: A deterministic SHA-256 hash computed from the target `hardware` profile, `project` git URL, `git_ref` revision, optional `package` target name, and optional `binary` target name.
 - **Cache Hit**: If a build request perfectly matches an existing cache key, the server checks the status of the cached job. If it is `done` and the physical `.tar.gz` archive is present on disk, the compilation is bypassed entirely and the server immediately returns `202 Accepted` along with the *cached* `job_id`.
 - **Cache Fallback**: If the cache check succeeds but the physical binary artifact was removed or deleted from the server's filesystem, Koval ignores the cache entry, queues a fresh compilation job, and registers the newly generated artifact upon completion.
 
@@ -60,7 +60,8 @@ Triggers a new background compilation job using a target hardware profile suppli
       - **pcie_info** (String or Null): PCIe generation and lane count.
 - **project** (String, Required): URL or path of the target Rust project to build (e.g. `"https://github.com/example/project.git"`).
 - **git_ref** (String, Required): Branch, tag, or exact commit hash to check out (e.g. `"main"`).
-- **binary** (String, Optional): The name of a specific binary target to compile (e.g. `"server"`). If omitted or `null`, Koval automatically builds the single root package, or all workspace binaries if the repository is a Cargo workspace.
+- **package** (String, Optional): The name of a specific package in the workspace to compile (e.g. `"server"`). If omitted or `null`, Koval compiles the workspace as a whole or uses the root package.
+- **binary** (String, Optional): The name of a specific binary target to compile (e.g. `"server"`). If omitted or `null`, Koval automatically builds the target package, or all workspace/package binaries if not specified.
 
 #### Response Schema
 - **202 Accepted**: The job is successfully authenticated, saved to SQLite, and pushed into the build queue.

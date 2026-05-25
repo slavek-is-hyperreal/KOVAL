@@ -155,7 +155,7 @@ fn process_job(
         Err(err) => return fail_job(&format!("Failed to read Cargo.toml: {}", err)),
     };
 
-    let build_mode = match detect_build_mode(&cargo_toml_content, job.binary.as_deref()) {
+    let build_mode = match detect_build_mode(&cargo_toml_content, job.binary.as_deref(), job.package.as_deref()) {
         Ok(mode) => mode,
         Err(err) => return fail_job(&err),
     };
@@ -166,11 +166,15 @@ fn process_job(
         BuildMode::Workspace => {
             cargo_args.push("--workspace");
         }
+        BuildMode::PackageInWorkspace(pkg) => {
+            cargo_args.push("-p");
+            cargo_args.push(pkg);
+        }
         BuildMode::SpecificBinary(name) => {
             cargo_args.push("--bin");
             cargo_args.push(name);
         }
-        BuildMode::SinglePackage(_) => {
+        BuildMode::MultiBin | BuildMode::SinglePackage(_) => {
             // default build
         }
     }
@@ -211,7 +215,7 @@ fn process_job(
         let release_dir = build_dir.join("target").join("release");
 
         match &build_mode {
-            BuildMode::Workspace => {
+            BuildMode::Workspace | BuildMode::PackageInWorkspace(_) | BuildMode::MultiBin => {
                 let mut binaries = Vec::new();
                 let dir_entries = match std::fs::read_dir(&release_dir) {
                     Ok(entries) => entries,
@@ -250,7 +254,7 @@ fn process_job(
                 }
 
                 if binaries.is_empty() {
-                    return fail_job("Workspace build succeeded but no executable binaries found in target/release/");
+                    return fail_job("Build succeeded but no executable binaries found in target/release/");
                 }
 
                 // Compress workspace binaries using local tar utility
@@ -337,6 +341,7 @@ fn process_job(
             &job.project,
             &job.git_ref,
             job.binary.as_deref(),
+            job.package.as_deref(),
         );
 
         {
@@ -374,11 +379,17 @@ fn process_job(
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum BuildMode {
     Workspace,
+    PackageInWorkspace(String),
     SpecificBinary(String),
+    MultiBin,
     SinglePackage(String),
 }
 
-pub fn detect_build_mode(cargo_toml_content: &str, binary: Option<&str>) -> Result<BuildMode, String> {
+pub fn detect_build_mode(
+    cargo_toml_content: &str,
+    binary: Option<&str>,
+    package: Option<&str>,
+) -> Result<BuildMode, String> {
     if let Some(bin_name) = binary {
         return Ok(BuildMode::SpecificBinary(bin_name.to_string()));
     }
@@ -390,14 +401,30 @@ pub fn detect_build_mode(cargo_toml_content: &str, binary: Option<&str>) -> Resu
     let is_package = value.get("package").is_some();
 
     if is_workspace && !is_package {
-        Ok(BuildMode::Workspace)
+        if let Some(pkg_name) = package {
+            Ok(BuildMode::PackageInWorkspace(pkg_name.to_string()))
+        } else {
+            Ok(BuildMode::Workspace)
+        }
     } else if is_package {
         let name = value
             .get("package")
             .and_then(|p| p.get("name"))
             .and_then(|n| n.as_str())
             .ok_or_else(|| "Missing name field under [package] in Cargo.toml".to_string())?;
-        Ok(BuildMode::SinglePackage(name.to_string()))
+
+        let bin_sections = value.get("bin").and_then(|b| b.as_array());
+        let has_multiple_bins = if let Some(bins) = bin_sections {
+            bins.len() > 1
+        } else {
+            false
+        };
+
+        if has_multiple_bins {
+            Ok(BuildMode::MultiBin)
+        } else {
+            Ok(BuildMode::SinglePackage(name.to_string()))
+        }
     } else {
         Err("Cargo.toml has neither a [package] nor a root [workspace] section".to_string())
     }
@@ -413,7 +440,7 @@ mod tests {
             [workspace]
             members = ["crate1", "crate2"]
         "#;
-        let mode = detect_build_mode(toml, None).unwrap();
+        let mode = detect_build_mode(toml, None, None).unwrap();
         assert_eq!(mode, BuildMode::Workspace);
     }
 
@@ -423,7 +450,27 @@ mod tests {
             [workspace]
             members = ["crate1", "crate2"]
         "#;
-        let mode = detect_build_mode(toml, Some("server")).unwrap();
+        let mode = detect_build_mode(toml, Some("server"), None).unwrap();
+        assert_eq!(mode, BuildMode::SpecificBinary("server".to_string()));
+    }
+
+    #[test]
+    fn test_detect_build_mode_workspace_with_package() {
+        let toml = r#"
+            [workspace]
+            members = ["crate1", "crate2"]
+        "#;
+        let mode = detect_build_mode(toml, None, Some("crate1")).unwrap();
+        assert_eq!(mode, BuildMode::PackageInWorkspace("crate1".to_string()));
+    }
+
+    #[test]
+    fn test_detect_build_mode_workspace_with_package_and_specific_binary() {
+        let toml = r#"
+            [workspace]
+            members = ["crate1", "crate2"]
+        "#;
+        let mode = detect_build_mode(toml, Some("server"), Some("crate1")).unwrap();
         assert_eq!(mode, BuildMode::SpecificBinary("server".to_string()));
     }
 
@@ -434,7 +481,7 @@ mod tests {
             name = "myapp"
             version = "0.1.0"
         "#;
-        let mode = detect_build_mode(toml, None).unwrap();
+        let mode = detect_build_mode(toml, None, None).unwrap();
         assert_eq!(mode, BuildMode::SinglePackage("myapp".to_string()));
     }
 
@@ -445,8 +492,46 @@ mod tests {
             name = "myapp"
             version = "0.1.0"
         "#;
-        let mode = detect_build_mode(toml, Some("alt")).unwrap();
+        let mode = detect_build_mode(toml, Some("alt"), None).unwrap();
         assert_eq!(mode, BuildMode::SpecificBinary("alt".to_string()));
+    }
+
+    #[test]
+    fn test_detect_build_mode_multibin() {
+        let toml = r#"
+            [package]
+            name = "myapp"
+            version = "0.1.0"
+
+            [[bin]]
+            name = "bin1"
+            path = "src/bin1.rs"
+
+            [[bin]]
+            name = "bin2"
+            path = "src/bin2.rs"
+        "#;
+        let mode = detect_build_mode(toml, None, None).unwrap();
+        assert_eq!(mode, BuildMode::MultiBin);
+    }
+
+    #[test]
+    fn test_detect_build_mode_multibin_with_specific_binary() {
+        let toml = r#"
+            [package]
+            name = "myapp"
+            version = "0.1.0"
+
+            [[bin]]
+            name = "bin1"
+            path = "src/bin1.rs"
+
+            [[bin]]
+            name = "bin2"
+            path = "src/bin2.rs"
+        "#;
+        let mode = detect_build_mode(toml, Some("bin1"), None).unwrap();
+        assert_eq!(mode, BuildMode::SpecificBinary("bin1".to_string()));
     }
 
     #[test]
@@ -455,7 +540,7 @@ mod tests {
             [package
             name = "myapp"
         "#;
-        let res = detect_build_mode(toml, None);
+        let res = detect_build_mode(toml, None, None);
         assert!(res.is_err());
     }
 }
