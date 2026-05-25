@@ -395,6 +395,7 @@ mod tests {
                     total_bytes: 8589934592,
                     available_bytes: 4294967296,
                     bandwidth_mbs: 12000.0,
+                    ..Default::default()
                 },
                 storage: schema::StorageProfile {
                     io_uring: false,
@@ -583,6 +584,7 @@ mod tests {
                     total_bytes: 8589934592,
                     available_bytes: 4294967296,
                     bandwidth_mbs: 12000.0,
+                    ..Default::default()
                 },
                 storage: schema::StorageProfile {
                     io_uring: false,

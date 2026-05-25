@@ -19,45 +19,17 @@ The core loop works end-to-end:
 - **token management** — create/list/revoke via API and CLI
 - **job history** — GET /jobs, browser UI at GET /ui
 - **koval CLI** — config, token, job, webhook subcommands
-- **cross-compilation** — support for compiling to `aarch64-unknown-linux-gnu`, `armv7-unknown-linux-gnueabihf`, and `x86_64-unknown-linux-musl` target architectures.
+- **cross-compilation** — support for compiling to `aarch64-unknown-linux-gnu`, `armv7-unknown-linux-gnueabihf`, and `x86_64-unknown-linux-musl` target architectures
+- **workspace support** — multi-binary and workspace auto-detection
+- **build cache** — cache hits based on hardware profile and project/git reference
+- **koval.toml self-build** — Koval is configured to compile itself with optimized hardware-aware rules
+- **production deployment** — ready-to-use Dockerfile, target architecture options, and docker-compose configurations
 
 What it cannot do yet is listed below.
 
 ---
 
 ## Next — things that should exist before calling this v1
-
-### Workspace and multi-binary support
-
-The single most important missing piece. Any project that is a Cargo workspace
-or produces more than one binary will fail with a cryptic error today.
-The fix adds `binary: Option<String>` to `JobRequest` and three build paths
-in `worker.rs`: workspace (auto-detect all executables), specific binary
-(`--bin <name>`), and the existing single-package path.
-
-After this lands, Koval can build Koval itself. That is the first real milestone.
-
-### Build cache
-
-Same hardware profile hash + same git ref = no recompilation, serve the
-existing artifact. The cache key is `sha256(hardware_json) + project + git_ref`.
-This is the single biggest usability improvement for people who run the same
-build repeatedly during development.
-
-### koval.toml for Koval itself
-
-Once workspace support exists, add `koval.toml` to this repository.
-Koval building itself with hardware-aware flags is the proof of concept
-that closes the loop.
-
-### Production Docker image
-
-A `Dockerfile` for the server (not just the test `Dockerfile.test`).
-Includes the Rust toolchain, configurable target architectures via
-`rustup target add`, and a documented `docker-compose.yml` for
-self-hosting.
-
----
 
 ### GitHub Actions integration
 
@@ -113,6 +85,24 @@ substantial on top of PGO.
 
 This is speculative. The detailed hypothesis and research protocol for this concept are parked in [ideas/gpu_compilation_research.md](file:///my_data/KOVAL/ideas/gpu_compilation_research.md).
 
+### Smart installer use case
+
+A small static binary (musl) that runs the probe, posts to a vendor's
+self-hosted Koval server, and installs the result. The vendor ships
+`curl -s https://get.myapp.com | sh` — the user gets a binary compiled
+for their exact hardware without installing Rust or any toolchain. The
+build cache makes this economically viable: the first user with a given
+hardware profile triggers compilation, all subsequent users with the
+same profile get a cached binary instantly.
+
+### Hardware-bound licensing
+
+Vendor-side license key validation tied to the target machine hardware
+fingerprint. A license key issued at purchase is bound to the probe's
+hardware profile on first activation. Subsequent builds verify the key
+matches the original fingerprint. Enables Koval as a distribution and
+activation layer for commercial software.
+
 ---
 
 ## What this will never try to be
@@ -129,8 +119,7 @@ open an issue before starting — not to ask permission, but to avoid
 duplicating work and to get early feedback on the approach.
 
 The things most likely to be useful to more people, roughly in order:
-workspace support, build cache, cross-compilation, GitHub Actions
-integration.
+GitHub Actions integration, memory latency probe, incremental builds.
 
 The things most likely to be interesting to work on, in no particular
-order: BOLT, PGO, GPU compilation research, NUMA-aware probe.
+order: BOLT, PGO, smart installer, hardware-bound licensing.

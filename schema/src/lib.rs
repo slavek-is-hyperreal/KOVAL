@@ -20,6 +20,14 @@ pub struct MemoryProfile {
     pub total_bytes: u64,
     pub available_bytes: u64,
     pub bandwidth_mbs: f64,
+    #[serde(default)]
+    pub latency_ns_l1: Option<f64>,
+    #[serde(default)]
+    pub latency_ns_l2: Option<f64>,
+    #[serde(default)]
+    pub latency_ns_l3: Option<f64>,
+    #[serde(default)]
+    pub latency_ns_ram: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
@@ -168,6 +176,7 @@ mod tests {
                 total_bytes: 17179869184,
                 available_bytes: 8589934592,
                 bandwidth_mbs: 25400.5,
+                ..Default::default()
             },
             storage: StorageProfile {
                 io_uring: true,
@@ -204,6 +213,7 @@ mod tests {
                 total_bytes: 8589934592,
                 available_bytes: 4294967296,
                 bandwidth_mbs: 12000.0,
+                ..Default::default()
             },
             storage: StorageProfile {
                 io_uring: false,
@@ -243,6 +253,7 @@ mod tests {
                 total_bytes: 8589934592,
                 available_bytes: 4294967296,
                 bandwidth_mbs: 12000.0,
+                ..Default::default()
             },
             storage: StorageProfile {
                 io_uring: false,
@@ -308,6 +319,7 @@ mod tests {
                 total_bytes: 8589934592,
                 available_bytes: 4294967296,
                 bandwidth_mbs: 12000.0,
+                ..Default::default()
             },
             storage: StorageProfile {
                 io_uring: false,
@@ -385,6 +397,7 @@ mod tests {
                 total_bytes: 8589934592,
                 available_bytes: 4294967296,
                 bandwidth_mbs: 12000.0,
+                ..Default::default()
             },
             storage: StorageProfile {
                 io_uring: false,
@@ -484,6 +497,10 @@ mod tests {
                 total_bytes: 8589934592,
                 available_bytes: 4294967296,
                 bandwidth_mbs: 12000.0,
+                latency_ns_l1: Some(1.2),
+                latency_ns_l2: Some(4.5),
+                latency_ns_l3: Some(15.6),
+                latency_ns_ram: Some(85.3),
             },
             storage: StorageProfile {
                 io_uring: true,
@@ -546,6 +563,10 @@ mod tests {
         assert_eq!(deserialized.cpu.kernel_version, None);
         assert_eq!(deserialized.cpu.cpu_base_freq_mhz, None);
         assert_eq!(deserialized.cpu.cpu_max_freq_mhz, None);
+        assert_eq!(deserialized.memory.latency_ns_l1, None);
+        assert_eq!(deserialized.memory.latency_ns_l2, None);
+        assert_eq!(deserialized.memory.latency_ns_l3, None);
+        assert_eq!(deserialized.memory.latency_ns_ram, None);
         assert_eq!(deserialized.numa.node_count, 0);
         assert!(deserialized.numa.nodes.is_empty());
     }

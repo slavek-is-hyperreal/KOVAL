@@ -510,6 +510,7 @@ mod tests {
                 total_bytes: 8192,
                 available_bytes: 4096,
                 bandwidth_mbs: 1000.0,
+                ..Default::default()
             },
             storage: StorageProfile {
                 io_uring: false,
@@ -576,7 +577,7 @@ mod tests {
         // 3. Test recent jobs list
         let hardware = HardwareProfile {
             cpu: CpuProfile { flags: vec![], cache_topology: "".to_string(), core_count: 1, ..Default::default() },
-            memory: MemoryProfile { total_bytes: 1024, available_bytes: 512, bandwidth_mbs: 100.0 },
+            memory: MemoryProfile { total_bytes: 1024, available_bytes: 512, bandwidth_mbs: 100.0, ..Default::default() },
             storage: StorageProfile { io_uring: false, o_direct: false, read_speed_mbs: 10.0, write_speed_mbs: 10.0 },
             gpu: GpuProfile { devices: vec![] },
             ..Default::default()
@@ -598,7 +599,7 @@ mod tests {
 
         let hardware = HardwareProfile {
             cpu: CpuProfile { flags: vec![], cache_topology: "".to_string(), core_count: 1, ..Default::default() },
-            memory: MemoryProfile { total_bytes: 1024, available_bytes: 512, bandwidth_mbs: 100.0 },
+            memory: MemoryProfile { total_bytes: 1024, available_bytes: 512, bandwidth_mbs: 100.0, ..Default::default() },
             storage: StorageProfile { io_uring: false, o_direct: false, read_speed_mbs: 10.0, write_speed_mbs: 10.0 },
             gpu: GpuProfile { devices: vec![] },
             ..Default::default()

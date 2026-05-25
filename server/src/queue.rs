@@ -72,6 +72,7 @@ mod tests {
                 total_bytes: 4096,
                 available_bytes: 2048,
                 bandwidth_mbs: 100.0,
+                ..Default::default()
             },
             storage: StorageProfile {
                 io_uring: false,

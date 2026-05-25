@@ -189,6 +189,7 @@ mod tests {
                 total_bytes: 17179869184, // 16 GB
                 available_bytes: 8589934592,
                 bandwidth_mbs: 25000.0,
+                ..Default::default()
             },
             storage: StorageProfile {
                 io_uring: true,
@@ -281,6 +282,7 @@ mod tests {
                 total_bytes: 512 * 1024 * 1024, // 512 MB
                 available_bytes: 256 * 1024 * 1024,
                 bandwidth_mbs: 1000.0,
+                ..Default::default()
             },
             storage: StorageProfile {
                 io_uring: false,
@@ -435,6 +437,7 @@ mod tests {
                 total_bytes: 8192,
                 available_bytes: 4096,
                 bandwidth_mbs: 1000.0,
+                ..Default::default()
             },
             storage: StorageProfile {
                 io_uring: false,
