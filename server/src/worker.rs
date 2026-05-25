@@ -415,7 +415,7 @@ pub fn detect_build_mode(
 
         let bin_sections = value.get("bin").and_then(|b| b.as_array());
         let has_multiple_bins = if let Some(bins) = bin_sections {
-            bins.len() > 1
+            bins.len() >= 1
         } else {
             false
         };
@@ -542,5 +542,20 @@ mod tests {
         "#;
         let res = detect_build_mode(toml, None, None);
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_detect_build_mode_single_explicit_bin() {
+        let toml = r#"
+            [package]
+            name = "myapp"
+            version = "0.1.0"
+
+            [[bin]]
+            name = "custom-bin-name"
+            path = "src/main.rs"
+        "#;
+        let mode = detect_build_mode(toml, None, None).unwrap();
+        assert_eq!(mode, BuildMode::MultiBin);
     }
 }
