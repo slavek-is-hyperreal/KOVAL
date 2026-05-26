@@ -24,6 +24,7 @@ The core loop works end-to-end:
 - **build cache** — cache hits based on hardware profile and project/git reference
 - **koval.toml self-build** — Koval is configured to compile itself with optimized hardware-aware rules
 - **production deployment** — ready-to-use Dockerfile, target architecture options, and docker-compose configurations
+- **PGO support** — Profile-Guided Optimization (PGO) two-phase compilation pipeline, raw profile uploading (`.profraw`), automated profile merging (`llvm-profdata`), and CLI subcommands `pgo instrument` and `pgo upload`
 
 What it cannot do yet is listed below.
 
@@ -66,13 +67,6 @@ means adding clang invocation alongside cargo in `worker.rs` and extending
 
 The Linux kernel compiles with clang. A Koval-built kernel optimized for
 the exact machine it runs on is not a ridiculous idea.
-
-### PGO integration
-
-Profile-Guided Optimization: compile a profiling binary, run it on the
-target, collect profiles, recompile with `-C profile-use`. Koval already
-has the target machine in the loop (via the probe). The two-pass
-compilation fits naturally into the existing job model as a two-stage job.
 
 ### BOLT binary optimization
 

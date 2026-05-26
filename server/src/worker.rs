@@ -161,6 +161,47 @@ fn process_job(
     };
 
     // 6. Run Cargo Build compilation based on build mode
+    let mut rustflags = build_config.rustflags.clone();
+    if job.job_type == "pgo_instrument" {
+        let inst_flags = crate::pgo::instrument_flags(&job.id, artifacts_dir);
+        if !rustflags.is_empty() {
+            rustflags.push(' ');
+        }
+        rustflags.push_str(&inst_flags.join(" "));
+    } else if job.job_type == "pgo_optimize" {
+        let pgo_source_id = match &job.pgo_source_job_id {
+            Some(id) => id,
+            None => return fail_job("PGO optimize job missing source instrumentation job ID"),
+        };
+
+        let profile = {
+            let conn = conn_mutex.lock().unwrap();
+            db::get_pgo_profile(&conn, pgo_source_id)
+        };
+
+        let profile = match profile {
+            Ok(Some(p)) => p,
+            Ok(None) => return fail_job(&format!("No PGO profile record found for source job ID: {}", pgo_source_id)),
+            Err(e) => return fail_job(&format!("Database error querying PGO profile: {}", e)),
+        };
+
+        let merged_path_str = match &profile.merged_path {
+            Some(path) => path,
+            None => return fail_job(&format!("PGO source job {} profile data has not been merged", pgo_source_id)),
+        };
+
+        let merged_path = std::path::PathBuf::from(merged_path_str);
+        if !merged_path.exists() {
+            return fail_job(&format!("Merged profile data at {} does not exist", merged_path.display()));
+        }
+
+        let opt_flags = crate::pgo::optimize_flags(&merged_path);
+        if !rustflags.is_empty() {
+            rustflags.push(' ');
+        }
+        rustflags.push_str(&opt_flags.join(" "));
+    }
+
     let features_joined = build_config.features.join(",");
     let cargo_args = prepare_cargo_args(
         &build_mode,
@@ -168,7 +209,7 @@ fn process_job(
         &features_joined,
         job.target.as_deref(),
     );
-    let envs = prepare_cargo_envs(&build_config.env, &build_config.rustflags, job.target.as_deref());
+    let envs = prepare_cargo_envs(&build_config.env, &rustflags, job.target.as_deref());
 
     let build_output = Command::new("cargo")
         .args(&cargo_args)
@@ -619,5 +660,25 @@ mod tests {
         // Test environment preparation without target
         let envs_no_target = prepare_cargo_envs(&base_envs, "-C target-feature=+avx2", None);
         assert_eq!(envs_no_target.get("CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER"), None);
+    }
+
+    #[test]
+    fn test_pgo_rustflags_injection() {
+        let base_flags = "-C target-cpu=native";
+        let mut rustflags = base_flags.to_string();
+        let inst_flags = vec!["-C".to_string(), "profile-generate=/tmp/pgo/job1".to_string()];
+        if !rustflags.is_empty() {
+            rustflags.push(' ');
+        }
+        rustflags.push_str(&inst_flags.join(" "));
+        assert_eq!(rustflags, "-C target-cpu=native -C profile-generate=/tmp/pgo/job1");
+
+        let mut rustflags_opt = base_flags.to_string();
+        let opt_flags = vec!["-C".to_string(), "profile-use=/tmp/pgo/job1/merged.profdata".to_string(), "-C".to_string(), "llvm-args=-pgo-warn-missing-function".to_string()];
+        if !rustflags_opt.is_empty() {
+            rustflags_opt.push(' ');
+        }
+        rustflags_opt.push_str(&opt_flags.join(" "));
+        assert_eq!(rustflags_opt, "-C target-cpu=native -C profile-use=/tmp/pgo/job1/merged.profdata -C llvm-args=-pgo-warn-missing-function");
     }
 }

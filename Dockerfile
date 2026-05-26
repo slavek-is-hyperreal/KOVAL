@@ -25,6 +25,7 @@ RUN apt-get update && apt-get install -y \
     gcc-aarch64-linux-gnu \
     gcc-arm-linux-gnueabihf \
     musl-tools \
+    llvm \
     && rm -rf /var/lib/apt/lists/*
 
 # Add rustup targets for cross-compilation

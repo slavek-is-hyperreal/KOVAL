@@ -49,24 +49,37 @@ pub async fn build_handler(
         }
     }
 
+    // 1.6. Validate pgo_phase
+    let job_type = match payload.pgo_phase.as_deref() {
+        None => "standard",
+        Some("instrument") => "pgo_instrument",
+        Some(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "Invalid pgo_phase. Only 'instrument' is permitted on build request",
+            )
+                .into_response()
+        }
+    };
+
     // 2. Gather hardware profile using target probe binary (from target device payload)
     let hardware = payload.hardware.clone();
 
-    // 3. Build Cache Lookup
-    let hardware_json = serde_json::to_string(&hardware).unwrap_or_default();
-    let cache_key = crate::cache::compute_cache_key(
-        &hardware_json,
-        &payload.project,
-        &payload.git_ref,
-        payload.binary.as_deref(),
-        payload.package.as_deref(),
-        payload.target.as_deref(),
-    );
-
+    // 3. Build Cache Lookup (bypassed for PGO)
     let mut cache_hit = false;
     let mut cached_id = String::new();
 
-    {
+    if job_type == "standard" {
+        let hardware_json = serde_json::to_string(&hardware).unwrap_or_default();
+        let cache_key = crate::cache::compute_cache_key(
+            &hardware_json,
+            &payload.project,
+            &payload.git_ref,
+            payload.binary.as_deref(),
+            payload.package.as_deref(),
+            payload.target.as_deref(),
+        );
+
         let conn = state.conn.lock().unwrap();
         if let Ok(Some(job_id)) = db::get_cache_entry(&conn, &cache_key) {
             if let Ok(Some(job_status)) = db::get_job_status(&conn, &job_id) {
@@ -99,6 +112,8 @@ pub async fn build_handler(
         binary: payload.binary.clone(),
         package: payload.package.clone(),
         target: payload.target.clone(),
+        job_type: job_type.to_string(),
+        pgo_source_job_id: None,
     };
 
     // 5. Save job state in database
@@ -112,6 +127,8 @@ pub async fn build_handler(
             &job.git_ref,
             &job.hardware,
             &now.to_rfc3339(),
+            &job.job_type,
+            job.pgo_source_job_id.as_deref(),
         ) {
             return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to record job in database: {}", e)).into_response();
         }

@@ -11,6 +11,8 @@ pub struct Job {
     pub binary: Option<String>,
     pub package: Option<String>,
     pub target: Option<String>,
+    pub job_type: String,
+    pub pgo_source_job_id: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -99,6 +101,8 @@ mod tests {
             binary: None,
             package: None,
             target: None,
+            job_type: "standard".to_string(),
+            pgo_source_job_id: None,
         };
 
         let job2 = Job {
@@ -110,6 +114,8 @@ mod tests {
             binary: None,
             package: None,
             target: None,
+            job_type: "standard".to_string(),
+            pgo_source_job_id: None,
         };
 
         let job3 = Job {
@@ -121,6 +127,8 @@ mod tests {
             binary: None,
             package: None,
             target: None,
+            job_type: "standard".to_string(),
+            pgo_source_job_id: None,
         };
 
         // 1. Queueing returns correct ID
@@ -145,6 +153,8 @@ mod tests {
             binary: None,
             package: None,
             target: None,
+            job_type: "standard".to_string(),
+            pgo_source_job_id: None,
         };
         assert_eq!(queue.enqueue(job3_retry).unwrap(), "job-3");
 

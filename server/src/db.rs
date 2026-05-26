@@ -32,7 +32,64 @@ pub fn init_db<P: AsRef<Path>>(path: P) -> Result<Connection, rusqlite::Error> {
             started_at TEXT,
             finished_at TEXT,
             error_msg TEXT,
-            FOREIGN KEY(token_id) REFERENCES tokens(id)
+            job_type TEXT NOT NULL CHECK (job_type IN ('standard', 'pgo_instrument', 'pgo_optimize')) DEFAULT 'standard',
+            pgo_source_job_id TEXT,
+            FOREIGN KEY(token_id) REFERENCES tokens(id),
+            FOREIGN KEY(pgo_source_job_id) REFERENCES jobs(id)
+        );",
+        [],
+    )?;
+
+    // Run dynamic alterations for older database instances if columns are missing
+    let has_job_type = {
+        let mut stmt = conn.prepare("PRAGMA table_info(jobs)")?;
+        let mut rows = stmt.query([])?;
+        let mut exists = false;
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(1)?;
+            if name == "job_type" {
+                exists = true;
+                break;
+            }
+        }
+        exists
+    };
+
+    if !has_job_type {
+        conn.execute(
+            "ALTER TABLE jobs ADD COLUMN job_type TEXT NOT NULL CHECK (job_type IN ('standard', 'pgo_instrument', 'pgo_optimize')) DEFAULT 'standard';",
+            [],
+        )?;
+    }
+
+    let has_pgo_source_job_id = {
+        let mut stmt = conn.prepare("PRAGMA table_info(jobs)")?;
+        let mut rows = stmt.query([])?;
+        let mut exists = false;
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(1)?;
+            if name == "pgo_source_job_id" {
+                exists = true;
+                break;
+            }
+        }
+        exists
+    };
+
+    if !has_pgo_source_job_id {
+        conn.execute(
+            "ALTER TABLE jobs ADD COLUMN pgo_source_job_id TEXT REFERENCES jobs(id);",
+            [],
+        )?;
+    }
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS pgo_profiles (
+            instrument_job_id TEXT PRIMARY KEY,
+            profiles_dir TEXT NOT NULL,
+            merged_path TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(instrument_job_id) REFERENCES jobs(id) ON DELETE CASCADE
         );",
         [],
     )?;
@@ -123,6 +180,59 @@ pub fn revoke_token(conn: &Connection, id: i64) -> Result<(), rusqlite::Error> {
 
 // JOB QUERIES
 
+#[derive(Debug, PartialEq, Clone)]
+pub struct PgoProfileRow {
+    pub instrument_job_id: String,
+    pub profiles_dir: String,
+    pub merged_path: Option<String>,
+    pub created_at: String,
+}
+
+pub fn insert_pgo_profile(
+    conn: &Connection,
+    instrument_job_id: &str,
+    profiles_dir: &str,
+    created_at: &str,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT INTO pgo_profiles (instrument_job_id, profiles_dir, merged_path, created_at)
+         VALUES (?1, ?2, NULL, ?3)",
+        params![instrument_job_id, profiles_dir, created_at],
+    )?;
+    Ok(())
+}
+
+pub fn get_pgo_profile(
+    conn: &Connection,
+    instrument_job_id: &str,
+) -> Result<Option<PgoProfileRow>, rusqlite::Error> {
+    conn.query_row(
+        "SELECT instrument_job_id, profiles_dir, merged_path, created_at FROM pgo_profiles WHERE instrument_job_id = ?1",
+        params![instrument_job_id],
+        |row| {
+            Ok(PgoProfileRow {
+                instrument_job_id: row.get(0)?,
+                profiles_dir: row.get(1)?,
+                merged_path: row.get(2)?,
+                created_at: row.get(3)?,
+            })
+        },
+    )
+    .optional()
+}
+
+pub fn update_pgo_merged_path(
+    conn: &Connection,
+    instrument_job_id: &str,
+    merged_path: &str,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "UPDATE pgo_profiles SET merged_path = ?1 WHERE instrument_job_id = ?2",
+        params![merged_path, instrument_job_id],
+    )?;
+    Ok(())
+}
+
 pub fn insert_job(
     conn: &Connection,
     id: &str,
@@ -131,12 +241,14 @@ pub fn insert_job(
     git_ref: &str,
     hardware: &HardwareProfile,
     queued_at: &str,
+    job_type: &str,
+    pgo_source_job_id: Option<&str>,
 ) -> Result<(), rusqlite::Error> {
     let hardware_json = serde_json::to_string(hardware).unwrap_or_default();
     conn.execute(
-        "INSERT INTO jobs (id, token_id, project, git_ref, hardware_json, status, queued_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, 'queued', ?6)",
-        params![id, token_id, project, git_ref, hardware_json, queued_at],
+        "INSERT INTO jobs (id, token_id, project, git_ref, hardware_json, status, queued_at, job_type, pgo_source_job_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'queued', ?6, ?7, ?8)",
+        params![id, token_id, project, git_ref, hardware_json, queued_at, job_type, pgo_source_job_id],
     )?;
     Ok(())
 }
@@ -145,7 +257,7 @@ pub fn get_job_status(conn: &Connection, id: &str) -> Result<Option<JobStatus>, 
     let position = get_job_position(conn, id)?;
     
     conn.query_row(
-        "SELECT status, queued_at, started_at, finished_at, error_msg FROM jobs WHERE id = ?1",
+        "SELECT status, queued_at, started_at, finished_at, error_msg, job_type FROM jobs WHERE id = ?1",
         params![id],
         |row| {
             Ok(JobStatus {
@@ -155,6 +267,38 @@ pub fn get_job_status(conn: &Connection, id: &str) -> Result<Option<JobStatus>, 
                 finished_at: row.get(3)?,
                 error_msg: row.get(4)?,
                 position,
+                job_type: row.get(5)?,
+            })
+        },
+    )
+    .optional()
+}
+
+pub struct JobDetails {
+    pub id: String,
+    pub token_id: i64,
+    pub project: String,
+    pub git_ref: String,
+    pub hardware: HardwareProfile,
+    pub status: String,
+    pub job_type: String,
+}
+
+pub fn get_job_details(conn: &Connection, id: &str) -> Result<Option<JobDetails>, rusqlite::Error> {
+    conn.query_row(
+        "SELECT id, token_id, project, git_ref, hardware_json, status, job_type FROM jobs WHERE id = ?1",
+        params![id],
+        |row| {
+            let hw_json: String = row.get(4)?;
+            let hardware: HardwareProfile = serde_json::from_str(&hw_json).unwrap_or_default();
+            Ok(JobDetails {
+                id: row.get(0)?,
+                token_id: row.get(1)?,
+                project: row.get(2)?,
+                git_ref: row.get(3)?,
+                hardware,
+                status: row.get(5)?,
+                job_type: row.get(6)?,
             })
         },
     )
@@ -525,7 +669,7 @@ mod tests {
         let job_id = "job-uuid-1234";
 
         // Insert Job
-        insert_job(&conn, job_id, token_id, "https://github.com/test/repo", "main", &hardware, "2026-05-17T16:53:00Z").unwrap();
+        insert_job(&conn, job_id, token_id, "https://github.com/test/repo", "main", &hardware, "2026-05-17T16:53:00Z", "standard", None).unwrap();
 
         // Verify status and position
         let status = get_job_status(&conn, job_id).unwrap().expect("Job should exist");
@@ -582,8 +726,8 @@ mod tests {
             gpu: GpuProfile { devices: vec![] },
             ..Default::default()
         };
-        insert_job(&conn, "job-1", token_id, "project1", "ref1", &hardware, "2026-05-17T16:53:00Z").unwrap();
-        insert_job(&conn, "job-2", token_id, "project2", "ref2", &hardware, "2026-05-17T16:54:00Z").unwrap();
+        insert_job(&conn, "job-1", token_id, "project1", "ref1", &hardware, "2026-05-17T16:53:00Z", "standard", None).unwrap();
+        insert_job(&conn, "job-2", token_id, "project2", "ref2", &hardware, "2026-05-17T16:54:00Z", "standard", None).unwrap();
 
         let recent = get_recent_jobs(&conn, token_id, 5).unwrap();
         assert_eq!(recent.len(), 2);
@@ -605,7 +749,7 @@ mod tests {
             ..Default::default()
         };
         let job_id = "job-uuid-cache";
-        insert_job(&conn, job_id, token_id, "project", "ref", &hardware, "2026-05-17T16:53:00Z").unwrap();
+        insert_job(&conn, job_id, token_id, "project", "ref", &hardware, "2026-05-17T16:53:00Z", "standard", None).unwrap();
 
         let cache_key = "my-awesome-cache-key-123";
         let created_at = "2026-05-17T16:53:00Z";
@@ -617,5 +761,51 @@ mod tests {
 
         let found = get_cache_entry(&conn, cache_key).unwrap().expect("Cache entry should exist");
         assert_eq!(found, job_id);
+    }
+
+    #[test]
+    fn test_db_pgo_profiles() {
+        let conn = setup_mem_db();
+        let token_hash = "$2b$12$pgotoken".to_string();
+        let token_id = insert_token(&conn, &token_hash, "PGO Tester", "2026-05-17T16:53:00Z").unwrap();
+
+        let hardware = HardwareProfile::default();
+        let instrument_job_id = "inst-job-1";
+
+        // Insert instrument job first
+        insert_job(&conn, instrument_job_id, token_id, "project", "ref", &hardware, "2026-05-17T16:53:00Z", "pgo_instrument", None).unwrap();
+
+        // 7. insert_pgo_profile then get_pgo_profile
+        let profiles_dir = "/artifacts/pgo/inst-job-1";
+        insert_pgo_profile(&conn, instrument_job_id, profiles_dir, "2026-05-17T16:53:00Z").unwrap();
+
+        let profile = get_pgo_profile(&conn, instrument_job_id).unwrap().expect("Profile should exist");
+        assert_eq!(profile.instrument_job_id, instrument_job_id);
+        assert_eq!(profile.profiles_dir, profiles_dir);
+        assert!(profile.merged_path.is_none());
+
+        // 8. update_pgo_merged_path
+        let merged_path = "/artifacts/pgo/inst-job-1/merged.profdata";
+        update_pgo_merged_path(&conn, instrument_job_id, merged_path).unwrap();
+
+        let profile_updated = get_pgo_profile(&conn, instrument_job_id).unwrap().expect("Profile should exist");
+        assert_eq!(profile_updated.merged_path, Some(merged_path.to_string()));
+    }
+
+    #[test]
+    fn test_db_jobs_job_type_constraints() {
+        let conn = setup_mem_db();
+        let token_hash = "$2b$12$pgotoken2".to_string();
+        let token_id = insert_token(&conn, &token_hash, "PGO Tester 2", "2026-05-17T16:53:00Z").unwrap();
+        let hardware = HardwareProfile::default();
+
+        // 9. insert_job with job_type = "pgo_instrument"
+        insert_job(&conn, "job-pgo", token_id, "project", "ref", &hardware, "2026-05-17T16:53:00Z", "pgo_instrument", None).unwrap();
+        let status = get_job_status(&conn, "job-pgo").unwrap().expect("Job should exist");
+        assert_eq!(status.job_type, "pgo_instrument");
+
+        // 10. insert_job with invalid job_type value -> constraint violation error
+        let err = insert_job(&conn, "job-invalid", token_id, "project", "ref", &hardware, "2026-05-17T16:53:00Z", "invalid_type", None);
+        assert!(err.is_err());
     }
 }

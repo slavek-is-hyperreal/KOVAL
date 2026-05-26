@@ -67,6 +67,10 @@ Triggers a new background compilation job using a target hardware profile suppli
   - `armv7-unknown-linux-gnueabihf`
   - `x86_64-unknown-linux-musl`
   If omitted or `null`, Koval compiles natively for the host architecture.
+- **pgo_phase** (String, Optional): Trigger Profile-Guided Optimization (PGO) phases. Supported values are:
+  - `"instrument"`: Inject compilation flags to generate an instrumented binary.
+  - `"optimize"`: Compile/optimize the binary using merged profile data.
+  If omitted or `null`, standard compilation is performed.
 
 #### Response Schema
 - **202 Accepted**: The job is successfully authenticated, saved to SQLite, and pushed into the build queue.
@@ -139,6 +143,7 @@ Retrieves the current execution state, timing, and compilation outcome for a spe
   - **finished_at** (String or Null): ISO 8601 timestamp representing job completion time.
   - **error_msg** (String or Null): Compilation errors or runtime failure diagnostic details.
   - **position** (Integer or Null): Queue position index if state is `"queued"` (1-indexed).
+  - **artifact_sha256** (String or Null): The SHA-256 hash of the generated binary artifact (populated when status is `"done"`).
   ```json
   {
     "status": "done",
@@ -146,7 +151,8 @@ Retrieves the current execution state, timing, and compilation outcome for a spe
     "started_at": "2026-05-17T17:29:48Z",
     "finished_at": "2026-05-17T17:30:00Z",
     "error_msg": null,
-    "position": null
+    "position": null,
+    "artifact_sha256": "4b16c3735895bf1b995215fea38359f797ca1bb89d09bc3536eb54f26549392e"
   }
   ```
 - **401 Unauthorized**: Missing or invalid authentication token.
@@ -496,4 +502,164 @@ Authentication details (the user's Bearer token) are keyed securely via standard
 # Serves application index HTML to browser clients
 curl -X GET http://localhost:8080/ui
 ```
+```
+
+---
+
+### 8. Smart Installer Endpoints
+
+Orchestrates the dynamic hardware profiling, build enqueuing, and download pipeline.
+
+#### Download Rendered Installer Script
+`GET /install/{project}`
+
+Generates and serves a POSIX-compliant shell script configured specifically for the target project.
+
+##### Path Parameters
+- **project** (String, Required): URL-encoded repository URL or path (e.g. `%2Fkoval` or `https%3A%2F%2Fgithub.com%2Fexample%2Fproject`).
+
+##### Query Parameters
+- **ref** (String, Optional): Git branch, tag, or commit reference to compile (default: `"main"`).
+- **token** (String, Optional): Bearer token passed down to the script to authorize internal callbacks.
+
+##### Response Schema
+- **200 OK**: Returns shell installer script as `text/x-shellscript`.
+
+##### Example Command
+```bash
+curl -s "http://localhost:8080/install/%2Fkoval?ref=main&token=koval_tkn_default_admin" > install.sh
+```
+
+---
+
+#### Download Static Hardware Probe
+`GET /probe/static/{arch}`
+
+Serves a pre-built static `musl` build of the hardware profiling probe for client architectures.
+
+##### Path Parameters
+- **arch** (String, Required): Target CPU architecture (one of `"x86_64"`, `"aarch64"`).
+
+##### Response Schema
+- **200 OK**: Serves the binary over `application/octet-stream`.
+- **404 Not Found**: Unsupported architecture.
+
+##### Example Command
+```bash
+curl -sL http://localhost:8080/probe/static/x86_64 -o koval-probe
+```
+
+---
+
+#### Optimal Build Request / Forge Install
+`POST /forge/install`
+
+Accepts a hardware profile from the client probe and either returns an instant cached binary download URL or registers and enqueues a new compilation job.
+
+##### Request Headers
+- `Authorization: Bearer koval_tkn_default_admin` (Required)
+- `Content-Type: application/json` (Required)
+
+##### Query Parameters
+- **project** (String, Required): Target repository path/URL.
+- **ref** (String, Required): Target Git branch/tag/hash.
+
+##### Request Body
+JSON object representing the `HardwareProfile` collected by the client probe.
+
+##### Response Schema
+- **200 OK (Cache Miss)**: Job successfully enqueued.
+  ```json
+  {
+    "status": "building",
+    "job_id": "9d219895-63e6-4458-ae43-ecdda3afc5f1"
+  }
+  ```
+- **200 OK (Cache Hit)**: Cached build found.
+  ```json
+  {
+    "status": "cached",
+    "download_url": "/build/dc989442-a8a0-4aa5-a59c-43ce508c0ac7/binary",
+    "sha256": "4b16c3735895bf1b995215fea38359f797ca1bb89d09bc3536eb54f26549392e"
+  }
+  ```
+- **401 Unauthorized**: Missing or invalid Bearer token.
+- **429 Too Many Requests**: Token rate limit exceeded.
+
+##### Example Command
+```bash
+curl -X POST "http://localhost:8080/forge/install?project=%2Fkoval&ref=main" \
+  -H "Authorization: Bearer koval_tkn_default_admin" \
+  -H "Content-Type: application/json" \
+  -d @profile.json
+```
+
+---
+
+### 9. Profile-Guided Optimization (PGO)
+
+Manage Profile-Guided Optimization workflows, profile uploading, and retrieving merged `.profdata` profiles.
+
+#### A. Upload Raw Profiles & Trigger Optimization
+`POST /pgo/profiles/{instrument_job_id}`
+
+Uploads one or more raw `.profraw` profiling files generated from executing an instrumented binary, merges them using `llvm-profdata`, and automatically triggers a new optimization compilation job.
+
+##### Request Headers
+- `Authorization: Bearer <token>` (Required)
+- `Content-Type: multipart/form-data` (Required)
+
+##### Path Parameters
+- **instrument_job_id** (String, Required): The UUID of the successfully completed `"pgo_instrument"` build job that generated the binary.
+
+##### Request Body
+Multipart form-data containing one or more files under the field name `profile`. All uploaded files must end with the `.profraw` extension.
+
+##### Response Schema
+- **202 Accepted**: Raw profiles are successfully validated, written, and merged. A new `"pgo_optimize"` job is queued.
+  ```json
+  {
+    "merged_profile_url": "/pgo/profiles/7f18b456-c392-4911-897b-928efad984d8/merged.profdata",
+    "optimization_job_id": "77e38202-b2d9-4809-9134-8c8a74b48cc1"
+  }
+  ```
+- **400 Bad Request**: Non-`.profraw` extension file uploaded, or job ID corresponds to a non-instrumented build job.
+- **401 Unauthorized**: Missing or invalid Bearer token.
+- **403 Forbidden**: Accessing job created by another token.
+- **404 Not Found**: Instrumented job UUID does not exist.
+
+##### Example Command
+```bash
+curl -X POST http://localhost:8080/pgo/profiles/7f18b456-c392-4911-897b-928efad984d8 \
+  -H "Authorization: Bearer koval_tkn_default_admin" \
+  -F "profile=@default_123.profraw" \
+  -F "profile=@default_456.profraw"
+```
+
+---
+
+#### B. Download Merged PGO Profile
+`GET /pgo/profiles/{instrument_job_id}/merged.profdata`
+
+Downloads the merged binary profile data (`merged.profdata`) compiled from the raw uploads.
+
+##### Request Headers
+- `Authorization: Bearer <token>` (Required)
+
+##### Path Parameters
+- **instrument_job_id** (String, Required): The UUID of the completed instrumentation job.
+
+##### Response Schema
+- **200 OK**: Profile exists. Downloded as a raw binary octet stream.
+  - **Headers**:
+    - `Content-Type: application/octet-stream`
+- **401 Unauthorized**: Missing or invalid Bearer token.
+- **403 Forbidden**: Accessing profile created by another token.
+- **404 Not Found**: Merged profile does not exist for the job ID.
+
+##### Example Command
+```bash
+curl -X GET http://localhost:8080/pgo/profiles/7f18b456-c392-4911-897b-928efad984d8/merged.profdata \
+  -H "Authorization: Bearer koval_tkn_default_admin" \
+  -o merged.profdata
 ```

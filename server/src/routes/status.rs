@@ -46,7 +46,20 @@ pub async fn status_handler(
     };
 
     match status_res {
-        Ok(Some(status)) => (StatusCode::OK, Json(status)).into_response(),
+        Ok(Some(status)) => {
+            let mut val = serde_json::to_value(&status).unwrap_or(serde_json::Value::Null);
+            if status.status == "done" {
+                if let Ok(Some((_, _, sha256))) = {
+                    let conn = state.conn.lock().unwrap();
+                    db::get_artifact(&conn, &job_id)
+                } {
+                    if let serde_json::Value::Object(ref mut map) = val {
+                        map.insert("artifact_sha256".to_string(), serde_json::Value::String(sha256));
+                    }
+                }
+            }
+            (StatusCode::OK, Json(val)).into_response()
+        }
         Ok(None) => (StatusCode::NOT_FOUND, "Job not found").into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Database query error: {}", e)).into_response(),
     }

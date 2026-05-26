@@ -85,6 +85,18 @@ pub struct JobRequest {
     pub package: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pgo_phase: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct PgoUploadResponse {
+    pub merged_profile_url: String,
+    pub optimization_job_id: String,
+}
+
+fn default_job_type() -> String {
+    "standard".to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -95,6 +107,8 @@ pub struct JobStatus {
     pub finished_at: Option<String>,
     pub error_msg: Option<String>,
     pub position: Option<usize>,
+    #[serde(default = "default_job_type")]
+    pub job_type: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -232,6 +246,7 @@ mod tests {
             binary: None,
             package: None,
             target: None,
+            pgo_phase: None,
         };
 
         let serialized = serde_json::to_string(&request).expect("Failed to serialize JobRequest");
@@ -273,6 +288,7 @@ mod tests {
             binary: None,
             package: None,
             target: None,
+            pgo_phase: None,
         };
         let serialized_none = serde_json::to_string(&req_none).unwrap();
         assert!(!serialized_none.contains("\"binary\""));
@@ -285,6 +301,7 @@ mod tests {
             binary: Some("server".to_string()),
             package: None,
             target: None,
+            pgo_phase: None,
         };
         let serialized_some = serde_json::to_string(&req_some).unwrap();
         assert!(serialized_some.contains("\"binary\":\"server\""));
@@ -339,6 +356,7 @@ mod tests {
             binary: Some("server".to_string()),
             package: None,
             target: None,
+            pgo_phase: None,
         };
         let serialized_none = serde_json::to_string(&req_none).unwrap();
         assert!(!serialized_none.contains("\"package\""));
@@ -351,6 +369,7 @@ mod tests {
             binary: None,
             package: Some("server".to_string()),
             target: None,
+            pgo_phase: None,
         };
         let serialized_some = serde_json::to_string(&req_some).unwrap();
         assert!(serialized_some.contains("\"package\":\"server\""));
@@ -378,6 +397,7 @@ mod tests {
             binary: None,
             package: None,
             target: None,
+            pgo_phase: None,
         };
         let serialized_both_none = serde_json::to_string(&req_both_none).unwrap();
         assert!(!serialized_both_none.contains("\"binary\""));
@@ -417,6 +437,7 @@ mod tests {
             binary: None,
             package: None,
             target: None,
+            pgo_phase: None,
         };
         let serialized_none = serde_json::to_string(&req_none).unwrap();
         assert!(!serialized_none.contains("\"target\""));
@@ -429,6 +450,7 @@ mod tests {
             binary: None,
             package: None,
             target: Some("aarch64-unknown-linux-gnu".to_string()),
+            pgo_phase: None,
         };
         let serialized_some = serde_json::to_string(&req_some).unwrap();
         assert!(serialized_some.contains("\"target\":\"aarch64-unknown-linux-gnu\""));
@@ -457,6 +479,7 @@ mod tests {
             finished_at: None,
             error_msg: None,
             position: Some(2),
+            job_type: "standard".to_string(),
         };
 
         let serialized = serde_json::to_string(&status).expect("Failed to serialize JobStatus");
@@ -569,5 +592,75 @@ mod tests {
         assert_eq!(deserialized.memory.latency_ns_ram, None);
         assert_eq!(deserialized.numa.node_count, 0);
         assert!(deserialized.numa.nodes.is_empty());
+    }
+
+    #[test]
+    fn test_job_request_pgo_phase_serialization() {
+        let profile = HardwareProfile::default();
+
+        // 1. JobRequest with pgo_phase: None serializes without "pgo_phase" key
+        let req_none = JobRequest {
+            hardware: profile.clone(),
+            project: "myproj".to_string(),
+            git_ref: "main".to_string(),
+            binary: None,
+            package: None,
+            target: None,
+            pgo_phase: None,
+        };
+        let serialized_none = serde_json::to_string(&req_none).unwrap();
+        assert!(!serialized_none.contains("\"pgo_phase\""));
+
+        // 2. JobRequest with pgo_phase: Some("instrument") serializes with correct value
+        let req_some = JobRequest {
+            hardware: profile.clone(),
+            project: "myproj".to_string(),
+            git_ref: "main".to_string(),
+            binary: None,
+            package: None,
+            target: None,
+            pgo_phase: Some("instrument".to_string()),
+        };
+        let serialized_some = serde_json::to_string(&req_some).unwrap();
+        assert!(serialized_some.contains("\"pgo_phase\":\"instrument\""));
+
+        // 3. Old JSON without pgo_phase deserializes with pgo_phase: None
+        let old_json = r#"{
+            "project": "myproj",
+            "git_ref": "main",
+            "hardware": {
+                "cpu": {"flags":[], "cache_topology":"", "core_count":4},
+                "memory": {"total_bytes":8589934592, "available_bytes":4294967296, "bandwidth_mbs":12000.0},
+                "storage": {"io_uring":false, "o_direct":false, "read_speed_mbs":50.0, "write_speed_mbs":450.0},
+                "gpu": {"devices":[]}
+            }
+        }"#;
+        let deserialized: JobRequest = serde_json::from_str(old_json).unwrap();
+        assert_eq!(deserialized.pgo_phase, None);
+    }
+
+    #[test]
+    fn test_pgo_upload_response_serialization() {
+        let resp = PgoUploadResponse {
+            merged_profile_url: "/pgo/profiles/job-123/merged.profdata".to_string(),
+            optimization_job_id: "pgo-opt-job-123".to_string(),
+        };
+        let serialized = serde_json::to_string(&resp).unwrap();
+        let deserialized: PgoUploadResponse = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(resp, deserialized);
+    }
+
+    #[test]
+    fn test_job_status_job_type_backward_compatibility() {
+        let old_status_json = r#"{
+            "status": "queued",
+            "queued_at": "2026-05-17T16:53:00Z",
+            "started_at": null,
+            "finished_at": null,
+            "error_msg": null,
+            "position": 2
+        }"#;
+        let deserialized: JobStatus = serde_json::from_str(old_status_json).unwrap();
+        assert_eq!(deserialized.job_type, "standard");
     }
 }

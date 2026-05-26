@@ -178,7 +178,40 @@ Webhook successfully deleted/deactivated.
 
 ---
 
-## 6. Complete Command Reference Table
+## 6. Profile-Guided Optimization (PGO)
+
+Manage Profile-Guided Optimization two-phase pipelines from the terminal.
+
+### A. Submit Instrumentation Job
+```bash
+koval pgo instrument "https://github.com/org/proj.git" --git-ref "main" --cpu "native"
+```
+*Expected Output:*
+```text
+=======================================================
+  PGO INSTRUMENTATION JOB SUBMITTED SUCCESSFULLY
+  Job ID: 7f18b456-c392-4911-897b-928efad984d8
+=======================================================
+```
+
+### B. Upload Profiles & Trigger Optimization
+Once the instrumented binary has been executed on the target environment and has produced raw profiling files (`*.profraw`), place them in a directory and run the upload command:
+```bash
+koval pgo upload 7f18b456-c392-4911-897b-928efad984d8 ./profiles_dir
+```
+*Expected Output:*
+```text
+Uploading 3 .profraw files...
+=======================================================
+  PGO PROFILES UPLOADED & MERGED SUCCESSFULLY
+  Merged Profile URL:   /pgo/profiles/7f18b456-c392-4911-897b-928efad984d8/merged.profdata
+  Optimization Job ID:  77e38202-b2d9-4809-9134-8c8a74b48cc1
+=======================================================
+```
+
+---
+
+## 7. Complete Command Reference Table
 
 The table below catalogs all CLI execution patterns supported by the `koval` binary:
 
@@ -195,3 +228,5 @@ The table below catalogs all CLI execution patterns supported by the `koval` bin
 | `webhook create` | `--url <url> --secret <secret>` | Registers a webhook receiver URL with a signing secret key. |
 | `webhook list` | *(none)* | Prints a tabular list of all webhook subscriptions. |
 | `webhook delete` | `<id>` | Disables and revokes notifications for the webhook ID. |
+| `pgo instrument` | `<project> [--git-ref <ref>] [--cpu <cpu>] [--target <triple>]` | Submits a PGO instrumentation build job. |
+| `pgo upload` | `<instrument_job_id> <profiles_dir>` | Uploads raw profiling files, merges them, and triggers PGO optimization. |

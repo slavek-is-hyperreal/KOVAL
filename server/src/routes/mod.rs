@@ -10,6 +10,8 @@ pub mod webhooks;
 pub mod tokens;
 pub mod ui;
 pub mod jobs;
+pub mod install;
+pub mod pgo;
 
 #[derive(Clone)]
 pub struct AppState {

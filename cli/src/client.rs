@@ -27,7 +27,6 @@ impl ApiClient {
         auth_header.set_sensitive(true);
         
         headers.insert(AUTHORIZATION, auth_header);
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
         let client = Client::builder()
             .default_headers(headers)
@@ -47,6 +46,7 @@ impl ApiClient {
     fn post<T: serde::Serialize, R: DeserializeOwned>(&self, path: &str, body: &T) -> Result<R, String> {
         let url = format!("{}{}", self.server_url, path);
         let resp = self.client.post(&url)
+            .header(CONTENT_TYPE, "application/json")
             .json(body)
             .send()
             .map_err(|e| format!("Network request failed: {}", e))?;
@@ -127,5 +127,33 @@ impl ApiClient {
 
     pub fn delete_webhook(&self, id: i64) -> Result<(), String> {
         self.delete(&format!("/webhooks/{}", id))
+    }
+
+    pub fn submit_job(&self, req: &schema::JobRequest) -> Result<serde_json::Value, String> {
+        self.post("/build", req)
+    }
+
+    pub fn upload_pgo_profiles(&self, instrument_job_id: &str, files: Vec<(String, Vec<u8>)>) -> Result<schema::PgoUploadResponse, String> {
+        let url = format!("{}/pgo/profiles/{}", self.server_url, instrument_job_id);
+        let mut form = reqwest::blocking::multipart::Form::new();
+        
+        for (filename, content) in files {
+            let part = reqwest::blocking::multipart::Part::bytes(content)
+                .file_name(filename);
+            form = form.part("profile", part);
+        }
+
+        let resp = self.client.post(&url)
+            .multipart(form)
+            .send()
+            .map_err(|e| format!("Network request failed: {}", e))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(format!("Server returned error ({}): {}", status, text));
+        }
+
+        resp.json::<schema::PgoUploadResponse>().map_err(|e| format!("Failed to parse response JSON: {}", e))
     }
 }

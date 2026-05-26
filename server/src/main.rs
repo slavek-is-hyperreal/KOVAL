@@ -15,6 +15,7 @@ pub mod webhook;
 pub mod worker;
 pub mod cache;
 pub mod targets;
+pub mod pgo;
 
 use crate::queue::JobQueue;
 use crate::routes::AppState;
@@ -91,6 +92,11 @@ async fn main() {
         .route("/tokens/:id", axum::routing::delete(routes::tokens::delete_token_handler))
         .route("/ui", get(routes::ui::ui_handler))
         .route("/jobs", get(routes::jobs::list_jobs_handler))
+        .route("/install/:project", get(routes::install::install_script_handler))
+        .route("/probe/static/:arch", get(routes::install::static_probe_handler))
+        .route("/forge/install", post(routes::install::forge_install_handler))
+        .route("/pgo/profiles/:instrument_job_id", post(routes::pgo::upload_profiles_handler))
+        .route("/pgo/profiles/:instrument_job_id/merged.profdata", get(routes::pgo::get_merged_profile_handler))
         .with_state(state);
 
     // 7. Bind and run Axum server
@@ -133,6 +139,11 @@ mod tests {
         let app = Router::new()
             .route("/build", post(routes::build::build_handler))
             .route("/build/:id/status", get(routes::status::status_handler))
+            .route("/install/:project", get(routes::install::install_script_handler))
+            .route("/probe/static/:arch", get(routes::install::static_probe_handler))
+            .route("/forge/install", post(routes::install::forge_install_handler))
+            .route("/pgo/profiles/:instrument_job_id", post(routes::pgo::upload_profiles_handler))
+            .route("/pgo/profiles/:instrument_job_id/merged.profdata", get(routes::pgo::get_merged_profile_handler))
             .with_state(state);
 
         (app, shared_conn, shared_queue, rx)
@@ -705,6 +716,379 @@ mod tests {
             .header(header::CONTENT_TYPE, "application/json")
             .header(header::AUTHORIZATION, "Bearer test_bearer")
             .body(Body::from(payload_empty))
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_get_install_script() {
+        let (app, _, _, _rx) = build_test_router();
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/install/myapp?ref=v1.0.0&token=test_bearer")
+            .body(Body::empty())
+            .unwrap();
+
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        
+        let body_bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
+        assert!(body_str.contains("PROJECT=\"myapp\""));
+        assert!(body_str.contains("REF=\"v1.0.0\""));
+        assert!(body_str.contains("TOKEN=\"test_bearer\""));
+    }
+
+    #[tokio::test]
+    async fn test_get_static_probe() {
+        let (app, _, _, _rx) = build_test_router();
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/probe/static/x86_64")
+            .body(Body::empty())
+            .unwrap();
+
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_post_forge_install() {
+        let (app, _, _, _rx) = build_test_router();
+
+        let payload = r#"{
+            "cpu": {
+                "flags": ["avx2"],
+                "cache_topology": "L1d:32K",
+                "core_count": 4,
+                "cache_line_size": 64,
+                "kernel_version": "Linux",
+                "cpu_base_freq_mhz": 2000,
+                "cpu_max_freq_mhz": 3000
+            },
+            "memory": {
+                "total_bytes": 8589934592,
+                "available_bytes": 4294967296,
+                "bandwidth_mbs": 12000.0,
+                "latency_ns_l1": 1.5,
+                "latency_ns_l2": 3.5,
+                "latency_ns_l3": 15.0,
+                "latency_ns_ram": 75.0
+            },
+            "storage": {
+                "io_uring": false,
+                "o_direct": true,
+                "read_speed_mbs": 450.0,
+                "write_speed_mbs": 400.0
+            },
+            "gpu": {
+                "devices": []
+            }
+        }"#;
+
+        // Verify unauthorized requests fail!
+        let req_unauth = Request::builder()
+            .method("POST")
+            .uri("/forge/install?project=myapp&ref=v1.0.0")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(payload))
+            .unwrap();
+
+        let res_unauth = app.clone().oneshot(req_unauth).await.unwrap();
+        assert_eq!(res_unauth.status(), StatusCode::UNAUTHORIZED);
+
+        // Verify authorized request works
+        let req = Request::builder()
+            .method("POST")
+            .uri("/forge/install?project=myapp&ref=v1.0.0")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::from(payload))
+            .unwrap();
+
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let body_json: Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert!(body_json.get("status").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_integration_pgo_build_phases() {
+        let (app, conn_mutex, _queue, _rx) = build_test_router();
+
+        // 11. POST /build with pgo_phase: Some("instrument") -> 202 Accepted, job_type pgo_instrument in DB
+        let payload_instrument = r#"{
+            "project": "https://github.com/example/pgotest",
+            "git_ref": "v1.0",
+            "pgo_phase": "instrument",
+            "hardware": {
+                "cpu": {"flags": ["avx2"], "cache_topology": "L1:32KB", "core_count": 4},
+                "memory": {"total_bytes": 8589934592, "available_bytes": 4294967296, "bandwidth_mbs": 12000.0},
+                "storage": {"io_uring": false, "o_direct": true, "read_speed_mbs": 450.0, "write_speed_mbs": 400.0},
+                "gpu": {"devices": []}
+            }
+        }"#;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/build")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::from(payload_instrument))
+            .unwrap();
+
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::ACCEPTED);
+
+        let body_bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let body_json: Value = serde_json::from_slice(&body_bytes).unwrap();
+        let job_id = body_json["id"].as_str().expect("ID must be string");
+        
+        {
+            let conn = conn_mutex.lock().unwrap();
+            let job_status = db::get_job_status(&conn, job_id).unwrap().expect("Job should exist");
+            assert_eq!(job_status.job_type, "pgo_instrument");
+        }
+
+        // 12. POST /build with pgo_phase: Some("optimize") -> 400 Bad Request
+        let payload_optimize = r#"{
+            "project": "https://github.com/example/pgotest",
+            "git_ref": "v1.0",
+            "pgo_phase": "optimize",
+            "hardware": {
+                "cpu": {"flags": ["avx2"], "cache_topology": "L1:32KB", "core_count": 4},
+                "memory": {"total_bytes": 8589934592, "available_bytes": 4294967296, "bandwidth_mbs": 12000.0},
+                "storage": {"io_uring": false, "o_direct": true, "read_speed_mbs": 450.0, "write_speed_mbs": 400.0},
+                "gpu": {"devices": []}
+            }
+        }"#;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/build")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::from(payload_optimize))
+            .unwrap();
+
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+        // 13. POST /build with pgo_phase: Some("invalid") -> 400 Bad Request
+        let payload_invalid = r#"{
+            "project": "https://github.com/example/pgotest",
+            "git_ref": "v1.0",
+            "pgo_phase": "invalid",
+            "hardware": {
+                "cpu": {"flags": ["avx2"], "cache_topology": "L1:32KB", "core_count": 4},
+                "memory": {"total_bytes": 8589934592, "available_bytes": 4294967296, "bandwidth_mbs": 12000.0},
+                "storage": {"io_uring": false, "o_direct": true, "read_speed_mbs": 450.0, "write_speed_mbs": 400.0},
+                "gpu": {"devices": []}
+            }
+        }"#;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/build")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::from(payload_invalid))
+            .unwrap();
+
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+        // 14. POST /build with pgo_phase: Some("instrument") does NOT trigger build cache hit even when standard identical build exists
+        // Setup standard build first in cache
+        let payload_std = r#"{
+            "project": "https://github.com/example/pgotest",
+            "git_ref": "v1.0",
+            "hardware": {
+                "cpu": {"flags": ["avx2"], "cache_topology": "L1:32KB", "core_count": 4},
+                "memory": {"total_bytes": 8589934592, "available_bytes": 4294967296, "bandwidth_mbs": 12000.0},
+                "storage": {"io_uring": false, "o_direct": true, "read_speed_mbs": 450.0, "write_speed_mbs": 400.0},
+                "gpu": {"devices": []}
+            }
+        }"#;
+
+        let req_std = Request::builder()
+            .method("POST")
+            .uri("/build")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::from(payload_std))
+            .unwrap();
+
+        let res_std = app.clone().oneshot(req_std).await.unwrap();
+        assert_eq!(res_std.status(), StatusCode::ACCEPTED);
+        let bytes_std = axum::body::to_bytes(res_std.into_body(), usize::MAX).await.unwrap();
+        let json_std: Value = serde_json::from_slice(&bytes_std).unwrap();
+        let std_job_id = json_std["id"].as_str().unwrap().to_string();
+
+        // Create standard artifact and populate cache
+        let temp_dir = std::env::temp_dir().join("artifacts");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let dummy_archive = temp_dir.join(format!("{}.tar.gz", std_job_id));
+        std::fs::write(&dummy_archive, b"compiled standard binary").unwrap();
+
+        {
+            let conn = conn_mutex.lock().unwrap();
+            db::update_job_status(&conn, &std_job_id, "done", None, Some("2026-05-17T17:00:00Z"), None).unwrap();
+            db::insert_artifact(&conn, &std_job_id, &dummy_archive.to_string_lossy(), 100, "dummysha").unwrap();
+
+            let hardware = schema::HardwareProfile {
+                cpu: schema::CpuProfile {
+                    flags: vec!["avx2".to_string()],
+                    cache_topology: "L1:32KB".to_string(),
+                    core_count: 4,
+                    ..Default::default()
+                },
+                memory: schema::MemoryProfile {
+                    total_bytes: 8589934592,
+                    available_bytes: 4294967296,
+                    bandwidth_mbs: 12000.0,
+                    ..Default::default()
+                },
+                storage: schema::StorageProfile {
+                    io_uring: false,
+                    o_direct: true,
+                    read_speed_mbs: 450.0,
+                    write_speed_mbs: 400.0,
+                },
+                gpu: schema::GpuProfile { devices: vec![] },
+                ..Default::default()
+            };
+            let hw_str = serde_json::to_string(&hardware).unwrap();
+            let cache_key = crate::cache::compute_cache_key(&hw_str, "https://github.com/example/pgotest", "v1.0", None, None, None);
+            db::insert_cache_entry(&conn, &cache_key, &std_job_id, "2026-05-17T17:00:00Z").unwrap();
+        }
+
+        // Request instrumented build - must NOT hit cache
+        let req_inst = Request::builder()
+            .method("POST")
+            .uri("/build")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::from(payload_instrument))
+            .unwrap();
+
+        let res_inst = app.clone().oneshot(req_inst).await.unwrap();
+        assert_eq!(res_inst.status(), StatusCode::ACCEPTED);
+        let bytes_inst = axum::body::to_bytes(res_inst.into_body(), usize::MAX).await.unwrap();
+        let json_inst: Value = serde_json::from_slice(&bytes_inst).unwrap();
+        let inst_job_id = json_inst["id"].as_str().unwrap().to_string();
+
+        assert_ne!(std_job_id, inst_job_id); // CACHE BYPASSED!
+        std::fs::remove_file(&dummy_archive).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_integration_pgo_profiles_errors() {
+        let (app, conn_mutex, _queue, _rx) = build_test_router();
+
+        // 18. POST /pgo/profiles/non-existent -> 404
+        let boundary = "------------------------1234567890";
+        let body_content = format!(
+            "--{boundary}\r\n\
+             Content-Disposition: form-data; name=\"profile1\"; filename=\"test.profraw\"\r\n\
+             Content-Type: application/octet-stream\r\n\r\n\
+             dummy content\r\n\
+             --{boundary}--\r\n"
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri("/pgo/profiles/non-existent-id")
+            .header(header::CONTENT_TYPE, format!("multipart/form-data; boundary={boundary}"))
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::from(body_content.clone()))
+            .unwrap();
+
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+        // Create job but with standard type instead of pgo_instrument
+        let job_std_id = "job-std-123";
+        let hardware = schema::HardwareProfile { ..Default::default() };
+        {
+            let conn = conn_mutex.lock().unwrap();
+            db::insert_job(
+                &conn,
+                job_std_id,
+                1,
+                "https://github.com/example/pgotest",
+                "v1.0",
+                &hardware,
+                "2026-05-17T17:00:00Z",
+                "standard",
+                None,
+            ).unwrap();
+            db::update_job_status(&conn, job_std_id, "done", None, None, None).unwrap();
+        }
+
+        // Rejects because not pgo_instrument -> 400
+        let req = Request::builder()
+            .method("POST")
+            .uri(&format!("/pgo/profiles/{}", job_std_id))
+            .header(header::CONTENT_TYPE, format!("multipart/form-data; boundary={boundary}"))
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::from(body_content.clone()))
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+        // Create job with pgo_instrument type but status "queued"
+        let job_queued_id = "job-queued-123";
+        {
+            let conn = conn_mutex.lock().unwrap();
+            db::insert_job(
+                &conn,
+                job_queued_id,
+                1,
+                "https://github.com/example/pgotest",
+                "v1.0",
+                &hardware,
+                "2026-05-17T17:00:00Z",
+                "pgo_instrument",
+                None,
+            ).unwrap();
+        }
+
+        // 17. Rejects because not done -> 400 Bad Request
+        let req = Request::builder()
+            .method("POST")
+            .uri(&format!("/pgo/profiles/{}", job_queued_id))
+            .header(header::CONTENT_TYPE, format!("multipart/form-data; boundary={boundary}"))
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::from(body_content.clone()))
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+        // Update queued job to "done"
+        {
+            let conn = conn_mutex.lock().unwrap();
+            db::update_job_status(&conn, job_queued_id, "done", None, None, None).unwrap();
+        }
+
+        // 16. Rejects non-.profraw files -> 400 Bad Request
+        let body_invalid_file = format!(
+            "--{boundary}\r\n\
+             Content-Disposition: form-data; name=\"profile1\"; filename=\"test.txt\"\r\n\
+             Content-Type: text/plain\r\n\r\n\
+             dummy content\r\n\
+             --{boundary}--\r\n"
+        );
+        let req = Request::builder()
+            .method("POST")
+            .uri(&format!("/pgo/profiles/{}", job_queued_id))
+            .header(header::CONTENT_TYPE, format!("multipart/form-data; boundary={boundary}"))
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::from(body_invalid_file))
             .unwrap();
         let res = app.clone().oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::BAD_REQUEST);

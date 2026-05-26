@@ -23,6 +23,8 @@ enum Commands {
     Job(JobArgs),
     /// Manage active webhook notification endpoints
     Webhook(WebhookArgs),
+    /// Profile-Guided Optimization (PGO) operations
+    Pgo(PgoArgs),
 }
 
 #[derive(Args, Debug)]
@@ -102,6 +104,37 @@ enum WebhookSubcommands {
     /// Deactivate a webhook endpoint by ID
     Delete {
         id: i64,
+    },
+}
+
+#[derive(Args, Debug)]
+struct PgoArgs {
+    #[command(subcommand)]
+    command: PgoSubcommands,
+}
+
+#[derive(Subcommand, Debug)]
+enum PgoSubcommands {
+    /// Submit a new job with PGO phase set to 'instrument'
+    Instrument {
+        /// Project git URL
+        project: String,
+        /// Git reference (branch, tag, or commit SHA)
+        #[arg(long, default_value = "main")]
+        git_ref: String,
+        /// target architecture target triple
+        #[arg(long)]
+        target: Option<String>,
+        /// cpu profile flag (e.g. native, x86-64-v3)
+        #[arg(long, default_value = "native")]
+        cpu: String,
+    },
+    /// Upload profraw files and trigger optimization phase
+    Upload {
+        /// Instrumented job ID
+        instrument_job_id: String,
+        /// Directory containing .profraw files
+        profiles_dir: String,
     },
 }
 
@@ -242,6 +275,107 @@ fn main() {
                         Ok(_) => println!("Webhook successfully deleted/deactivated."),
                         Err(e) => {
                             eprintln!("Failed to delete webhook: {}", e);
+                            std::process::exit(1);
+                        }
+                    }
+                }
+            }
+        }
+        Commands::Pgo(pgo_args) => {
+            let client = match ApiClient::new(&config) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            match pgo_args.command {
+                PgoSubcommands::Instrument { project, git_ref, target, cpu } => {
+                    let hardware = schema::HardwareProfile {
+                        cpu: schema::CpuProfile {
+                            flags: vec![cpu],
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    };
+                    let req = schema::JobRequest {
+                        hardware,
+                        project,
+                        git_ref,
+                        binary: None,
+                        package: None,
+                        target,
+                        pgo_phase: Some("instrument".to_string()),
+                    };
+                    match client.submit_job(&req) {
+                        Ok(res) => {
+                            let job_id = res.get("id").and_then(|id| id.as_str()).unwrap_or("unknown");
+                            println!("=======================================================");
+                            println!("  PGO INSTRUMENTATION JOB SUBMITTED SUCCESSFULLY");
+                            println!("  Job ID: {}", job_id);
+                            println!("=======================================================");
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to submit instrumentation job: {}", e);
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                PgoSubcommands::Upload { instrument_job_id, profiles_dir } => {
+                    let dir_path = std::path::Path::new(&profiles_dir);
+                    if !dir_path.exists() || !dir_path.is_dir() {
+                        eprintln!("Error: Directory '{}' does not exist or is not a directory", profiles_dir);
+                        std::process::exit(1);
+                    }
+                    
+                    let entries = match std::fs::read_dir(dir_path) {
+                        Ok(e) => e,
+                        Err(err) => {
+                            eprintln!("Failed to read directory '{}': {}", profiles_dir, err);
+                            std::process::exit(1);
+                        }
+                    };
+
+                    let mut files = Vec::new();
+                    for entry in entries {
+                        let entry = match entry {
+                            Ok(e) => e,
+                            Err(_) => continue,
+                        };
+                        let path = entry.path();
+                        if path.is_file() {
+                            if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+                                if ext == "profraw" {
+                                    let filename = path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
+                                    let content = match std::fs::read(&path) {
+                                        Ok(c) => c,
+                                        Err(err) => {
+                                            eprintln!("Failed to read file '{}': {}", path.display(), err);
+                                            std::process::exit(1);
+                                        }
+                                    };
+                                    files.push((filename, content));
+                                }
+                            }
+                        }
+                    }
+
+                    if files.is_empty() {
+                        eprintln!("Error: No .profraw files found in directory '{}'", profiles_dir);
+                        std::process::exit(1);
+                    }
+
+                    println!("Uploading {} .profraw files...", files.len());
+                    match client.upload_pgo_profiles(&instrument_job_id, files) {
+                        Ok(res) => {
+                            println!("=======================================================");
+                            println!("  PGO PROFILES UPLOADED & MERGED SUCCESSFULLY");
+                            println!("  Merged Profile URL:   {}", res.merged_profile_url);
+                            println!("  Optimization Job ID:  {}", res.optimization_job_id);
+                            println!("=======================================================");
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to upload profiles: {}", e);
                             std::process::exit(1);
                         }
                     }

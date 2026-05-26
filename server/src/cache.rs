@@ -1,4 +1,5 @@
 use sha2::{Digest, Sha256};
+use schema::HardwareProfile;
 
 /// Computes the unique cache key for a build request based on hardware, project, git reference, binary target, package, and target.
 pub fn compute_cache_key(
@@ -9,6 +10,24 @@ pub fn compute_cache_key(
     package: Option<&str>,
     target: Option<&str>,
 ) -> String {
+    // Attempt to parse and normalize the hardware json, fallback to the original if parsing fails
+    let normalized_hw_json = if let Ok(mut profile) = serde_json::from_str::<HardwareProfile>(hardware_json) {
+        // Normalize dynamic / benchmarking fields
+        profile.memory.available_bytes = 0;
+        profile.memory.bandwidth_mbs = 0.0;
+        profile.memory.latency_ns_l1 = None;
+        profile.memory.latency_ns_l2 = None;
+        profile.memory.latency_ns_l3 = None;
+        profile.memory.latency_ns_ram = None;
+
+        profile.storage.read_speed_mbs = 0.0;
+        profile.storage.write_speed_mbs = 0.0;
+
+        serde_json::to_string(&profile).unwrap_or_else(|_| hardware_json.to_string())
+    } else {
+        hardware_json.to_string()
+    };
+
     let binary_str = match binary {
         Some(b) => format!("some:{}", b),
         None => "none".to_string(),
@@ -23,7 +42,7 @@ pub fn compute_cache_key(
     };
     let concatenated = format!(
         "{}|{}|{}|{}|{}|{}",
-        hardware_json, project, git_ref, binary_str, package_str, target_str
+        normalized_hw_json, project, git_ref, binary_str, package_str, target_str
     );
     
     let mut hasher = Sha256::new();

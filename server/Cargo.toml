@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 schema = { path = "../schema" }
 tokio = { version = "1.38", features = ["full"] }
-axum = "0.7"
+axum = { version = "0.7", features = ["multipart"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 bcrypt = "0.15"
 toml = "0.8"
