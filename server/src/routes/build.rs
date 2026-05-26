@@ -49,6 +49,18 @@ pub async fn build_handler(
         }
     }
 
+    if let Some(ref b) = payload.binary {
+        if !is_valid_cargo_name(b) {
+            return (StatusCode::BAD_REQUEST, "Invalid binary name").into_response();
+        }
+    }
+
+    if let Some(ref p) = payload.package {
+        if !is_valid_cargo_name(p) {
+            return (StatusCode::BAD_REQUEST, "Invalid package name").into_response();
+        }
+    }
+
     // 1.6. Validate pgo_phase
     let job_type = match payload.pgo_phase.as_deref() {
         None => "standard",
@@ -159,5 +171,41 @@ pub async fn build_handler(
         Err(QueueError::SendError(e)) => {
             (StatusCode::INTERNAL_SERVER_ERROR, format!("Job dispatch failed: {}", e)).into_response()
         }
+    }
+}
+
+pub fn is_valid_cargo_name(s: &str) -> bool {
+    if s.is_empty() || s.len() > 64 {
+        return false;
+    }
+    if s.starts_with('-') {
+        return false;
+    }
+    for c in s.chars() {
+        if !c.is_ascii_alphanumeric() && c != '-' && c != '_' {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cargo_name_validation() {
+        // Test case 16
+        assert!(is_valid_cargo_name("my-bin"));
+        // Test case 17
+        assert!(is_valid_cargo_name("my_bin_123"));
+        // Test case 18
+        assert!(!is_valid_cargo_name("-bad-start"));
+        // Test case 19
+        assert!(!is_valid_cargo_name("bad$char"));
+        // Test case 20
+        assert!(!is_valid_cargo_name(&"a".repeat(65)));
+        // Empty check
+        assert!(!is_valid_cargo_name(""));
     }
 }

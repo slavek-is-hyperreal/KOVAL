@@ -85,6 +85,9 @@ pub async fn upload_profiles_handler(
     // 5. Read and validate multipart fields
     let mut files_saved = 0;
     while let Ok(Some(field)) = multipart.next_field().await {
+        if files_saved >= 32 {
+            return (StatusCode::BAD_REQUEST, "Maximum of 32 profile files is allowed").into_response();
+        }
         let file_name = match field.file_name() {
             Some(name) => name.to_string(),
             None => continue,
@@ -96,7 +99,7 @@ pub async fn upload_profiles_handler(
 
         let data = match field.bytes().await {
             Ok(b) => b,
-            Err(e) => return (StatusCode::BAD_REQUEST, format!("Failed to read field: {}", e)).into_response(),
+            Err(e) => return e.into_response(),
         };
 
         let clean_name = match std::path::Path::new(&file_name).file_name() {
@@ -122,9 +125,12 @@ pub async fn upload_profiles_handler(
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to build merge command: {}", e)).into_response(),
     };
 
-    let output = match cmd.output() {
-        Ok(o) => o,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to execute llvm-profdata: {}", e)).into_response(),
+    let output_result = tokio::task::spawn_blocking(move || cmd.output()).await;
+
+    let output = match output_result {
+        Ok(Ok(o)) => o,
+        Ok(Err(e)) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to execute llvm-profdata: {}", e)).into_response(),
+        Err(join_err) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("Internal task join error: {}", join_err)).into_response(),
     };
 
     if !output.status.success() {
@@ -262,5 +268,24 @@ pub async fn get_merged_profile_handler(
         )
             .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to read profile: {}", e)).into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_pgo_spawn_blocking_merge_case_30() {
+        let mut cmd = std::process::Command::new("echo");
+        cmd.arg("hello");
+
+        let res = tokio::task::spawn_blocking(move || cmd.output()).await;
+        assert!(res.is_ok());
+        let output_res = res.unwrap();
+        assert!(output_res.is_ok());
+        let output = output_res.unwrap();
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "hello");
     }
 }

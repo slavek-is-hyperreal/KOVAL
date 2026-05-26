@@ -28,4 +28,4 @@ WORKDIR /koval
 COPY . .
 
 # Run cargo test on workspace in build stage
-CMD ["cargo", "test", "--workspace"]
+CMD ["cargo", "test", "--workspace", "--all-targets"]

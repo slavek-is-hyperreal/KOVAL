@@ -52,7 +52,7 @@ impl BuildWorker {
     }
 }
 
-fn process_job(
+pub fn process_job(
     conn_mutex: &Arc<Mutex<Connection>>,
     job: Job,
     artifacts_dir: &Path,
@@ -108,9 +108,14 @@ fn process_job(
         Ok(())
     };
 
+    // 1.5. Validate Project URL
+    if let Err(err) = validate_project_url(&job.project) {
+        return fail_job(&err);
+    }
+
     // 2. Clone Git Repository
     let clone_status = Command::new("git")
-        .args(["clone", &job.project, &build_dir.to_string_lossy()])
+        .args(["clone", "--depth=1", &job.project, &build_dir.to_string_lossy()])
         .status();
 
     match clone_status {
@@ -118,9 +123,14 @@ fn process_job(
         _ => return fail_job("Failed to git clone project repository"),
     }
 
+    // 2.5. Validate git_ref
+    if let Err(err) = validate_git_ref(&job.git_ref) {
+        return fail_job(&err);
+    }
+
     // 3. Checkout requested branch/commit
     let checkout_status = Command::new("git")
-        .args(["-C", &build_dir.to_string_lossy(), "checkout", &job.git_ref])
+        .args(["-C", &build_dir.to_string_lossy(), "checkout", "--", &job.git_ref])
         .status();
 
     match checkout_status {
@@ -211,17 +221,19 @@ fn process_job(
     );
     let envs = prepare_cargo_envs(&build_config.env, &rustflags, job.target.as_deref());
 
-    let build_output = Command::new("cargo")
-        .args(&cargo_args)
-        .envs(&envs)
-        .current_dir(&build_dir)
-        .output();
+    let timeout_secs = std::env::var("KOVAL_BUILD_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(3600);
+
+    let build_output = run_cargo_build(&cargo_args, &envs, &build_dir, timeout_secs);
 
     let build_success = match build_output {
         Ok(output) if output.status.success() => true,
         Ok(output) => {
             let stderr_msg = String::from_utf8_lossy(&output.stderr);
-            let full_err = format!("Cargo compilation failed:\n{}", stderr_msg);
+            let truncated_stderr = truncate_stderr(&stderr_msg);
+            let full_err = format!("Cargo compilation failed:\n{}", truncated_stderr);
             return fail_job(&full_err);
         }
         Err(err) => return fail_job(&format!("Cargo system execution failed: {}", err)),
@@ -507,6 +519,126 @@ pub fn prepare_cargo_envs(
     envs
 }
 
+pub fn run_cargo_build(
+    cargo_args: &[&str],
+    envs: &HashMap<String, String>,
+    build_dir: &std::path::Path,
+    timeout_secs: u64,
+) -> Result<std::process::Output, std::io::Error> {
+    let execute = async {
+        let mut child = match tokio::process::Command::new("cargo")
+            .args(cargo_args)
+            .envs(envs)
+            .current_dir(build_dir)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => return Err(e),
+        };
+
+        match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), child.wait()).await {
+            Ok(Ok(status)) => {
+                let mut stdout_buf = Vec::new();
+                if let Some(mut stdout) = child.stdout.take() {
+                    use tokio::io::AsyncReadExt;
+                    let _ = stdout.read_to_end(&mut stdout_buf).await;
+                }
+                let mut stderr_buf = Vec::new();
+                if let Some(mut stderr) = child.stderr.take() {
+                    use tokio::io::AsyncReadExt;
+                    let _ = stderr.read_to_end(&mut stderr_buf).await;
+                }
+                Ok(std::process::Output {
+                    status,
+                    stdout: stdout_buf,
+                    stderr: stderr_buf,
+                })
+            }
+            Ok(Err(e)) => Err(e),
+            Err(_) => {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "Cargo compilation timed out"))
+            }
+        }
+    };
+
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => handle.block_on(execute),
+        Err(_) => {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            rt.block_on(execute)
+        }
+    }
+}
+
+pub fn truncate_stderr(stderr: &str) -> String {
+    let lines: Vec<&str> = stderr.lines().collect();
+    let was_truncated_by_lines = lines.len() > 100;
+    
+    let line_truncated_str = if was_truncated_by_lines {
+        lines[..100].join("\n")
+    } else {
+        stderr.to_string()
+    };
+
+    let char_count = line_truncated_str.chars().count();
+    let was_truncated_by_chars = char_count > 4096;
+
+    let final_str = if was_truncated_by_chars {
+        line_truncated_str.chars().take(4096).collect::<String>()
+    } else {
+        line_truncated_str
+    };
+
+    if was_truncated_by_lines || was_truncated_by_chars {
+        let mut truncated = final_str;
+        if !truncated.ends_with('\n') {
+            truncated.push('\n');
+        }
+        truncated.push_str("[... stderr truncated due to size limits ...]\n");
+        truncated
+    } else {
+        final_str
+    }
+}
+
+pub fn validate_git_ref(git_ref: &str) -> Result<(), String> {
+    if git_ref.is_empty() {
+        return Err("Invalid git_ref: empty".to_string());
+    }
+    if git_ref.len() > 256 {
+        return Err("Invalid git_ref: too long".to_string());
+    }
+    if git_ref.starts_with('-') {
+        return Err("Invalid git_ref: starts with '-'".to_string());
+    }
+    if git_ref.contains("..") {
+        return Err("Invalid git_ref: contains '..'".to_string());
+    }
+    if git_ref.contains('\0') {
+        return Err("Invalid git_ref: contains null bytes".to_string());
+    }
+    for c in git_ref.chars() {
+        if !c.is_ascii_alphanumeric() && c != '-' && c != '.' && c != '_' && c != '/' {
+            return Err(format!("Invalid git_ref: character '{}' not allowed", c));
+        }
+    }
+    Ok(())
+}
+
+pub fn validate_project_url(url: &str) -> Result<(), String> {
+    if url.len() >= 8 && url[..8].eq_ignore_ascii_case("https://") {
+        Ok(())
+    } else {
+        Err("Only https:// project URLs are permitted".to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -680,5 +812,151 @@ mod tests {
         }
         rustflags_opt.push_str(&opt_flags.join(" "));
         assert_eq!(rustflags_opt, "-C target-cpu=native -C profile-use=/tmp/pgo/job1/merged.profdata -C llvm-args=-pgo-warn-missing-function");
+    }
+
+    #[test]
+    fn test_git_ref_validation() {
+        // Test case 8
+        assert!(validate_git_ref("main").is_ok());
+        // Test case 9
+        assert!(validate_git_ref("v1.2.3").is_ok());
+        // Test case 10
+        assert!(validate_git_ref("feature/my-branch").is_ok());
+        // Test case 11
+        assert!(validate_git_ref("abc123def456").is_ok());
+        // Test case 12
+        assert!(validate_git_ref("--orphan").is_err());
+        // Test case 13
+        assert!(validate_git_ref("refs/../../../etc").is_err());
+        // Test case 14
+        assert!(validate_git_ref("").is_err());
+        // Test case 15
+        assert!(validate_git_ref(&"a".repeat(257)).is_err());
+    }
+
+    #[test]
+    fn test_project_url_validation() {
+        // Test case 1
+        assert!(validate_project_url("https://github.com/user/repo").is_ok());
+        // Test case 2
+        assert!(validate_project_url("http://github.com/user/repo").is_err());
+        // Test case 3
+        assert!(validate_project_url("file:///etc/passwd").is_err());
+        // Test case 4
+        assert!(validate_project_url("git://github.com/user/repo").is_err());
+        // Test case 5
+        assert!(validate_project_url("ssh://user@host/repo").is_err());
+        // Test case 6
+        assert!(validate_project_url("").is_err());
+        // Test case 7
+        assert!(validate_project_url("not-a-url").is_err());
+        // Check case-insensitivity
+        assert!(validate_project_url("HTTPS://github.com/user/repo").is_ok());
+    }
+
+    #[test]
+    fn test_git_clone_depth() {
+        use std::process::Command;
+        use uuid::Uuid;
+
+        let base_temp = std::env::temp_dir().join(format!("git_test_{}", Uuid::new_v4()));
+        let src_dir = base_temp.join("src_repo");
+        let dest_dir = base_temp.join("dest_repo");
+        std::fs::create_dir_all(&src_dir).unwrap();
+
+        let run_git = |args: &[&str], dir: &std::path::Path| {
+            Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .status()
+                .unwrap();
+        };
+
+        run_git(&["init"], &src_dir);
+        run_git(&["config", "user.name", "Test User"], &src_dir);
+        run_git(&["config", "user.email", "test@example.com"], &src_dir);
+        run_git(&["config", "init.defaultBranch", "main"], &src_dir);
+
+        let file_path = src_dir.join("file.txt");
+        std::fs::write(&file_path, b"version 1").unwrap();
+        run_git(&["add", "file.txt"], &src_dir);
+        run_git(&["commit", "-m", "commit 1"], &src_dir);
+
+        std::fs::write(&file_path, b"version 2").unwrap();
+        run_git(&["add", "file.txt"], &src_dir);
+        run_git(&["commit", "-m", "commit 2"], &src_dir);
+
+        let status = Command::new("git")
+            .args(["clone", "--depth=1", &format!("file://{}", src_dir.to_string_lossy()), &dest_dir.to_string_lossy()])
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        let output = Command::new("git")
+            .args(["rev-list", "--count", "HEAD"])
+            .current_dir(&dest_dir)
+            .output()
+            .unwrap();
+        let count_str = String::from_utf8(output.stdout).unwrap();
+        let count: usize = count_str.trim().parse().unwrap();
+        assert_eq!(count, 1);
+
+        std::fs::remove_dir_all(&base_temp).ok();
+    }
+
+    #[test]
+    fn test_compilation_timeout_case_28() {
+        use uuid::Uuid;
+        let temp_dir = std::env::temp_dir().join(format!("timeout_test_{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_dir.join("src")).unwrap();
+
+        std::fs::write(
+            temp_dir.join("Cargo.toml"),
+            r#"[package]
+name = "timeout_test"
+version = "0.1.0"
+"#
+        ).unwrap();
+
+        std::fs::write(
+            temp_dir.join("src/main.rs"),
+            "fn main() {}"
+        ).unwrap();
+
+        std::fs::write(
+            temp_dir.join("build.rs"),
+            r#"fn main() {
+    std::thread::sleep(std::time::Duration::from_secs(10));
+}"#
+        ).unwrap();
+
+        let start = std::time::Instant::now();
+        let build_config_env = HashMap::new();
+        let res = run_cargo_build(&["build", "--release"], &build_config_env, &temp_dir, 1);
+        let duration = start.elapsed();
+
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+        assert!(duration < std::time::Duration::from_secs(5));
+
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_stderr_truncation_case_29() {
+        let short_err = "some error\nline 2";
+        assert_eq!(truncate_stderr(short_err), short_err);
+
+        let hundred_and_five_lines = (1..=105).map(|i| format!("line {}", i)).collect::<Vec<_>>().join("\n");
+        let truncated_lines = truncate_stderr(&hundred_and_five_lines);
+        assert!(truncated_lines.contains("[... stderr truncated due to size limits ...]"));
+        let line_count = truncated_lines.lines().count();
+        assert_eq!(line_count, 101);
+
+        let long_chars = "a".repeat(5000);
+        let truncated_chars = truncate_stderr(&long_chars);
+        assert!(truncated_chars.contains("[... stderr truncated due to size limits ...]"));
+        assert_eq!(truncated_chars.lines().next().unwrap().len(), 4096);
     }
 }

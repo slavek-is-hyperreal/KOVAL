@@ -148,8 +148,22 @@ pub fn build_config(hardware: &HardwareProfile, config: &KovalToml) -> BuildConf
                 collected_flags.extend(flags.iter().cloned());
             }
             if let Some(ref env) = rule.env {
+                let blocklist = [
+                    "KOVAL_DB",
+                    "KOVAL_ADMIN_TOKEN",
+                    "KOVAL_WEBHOOK_URL",
+                    "KOVAL_WEBHOOK_SECRET",
+                    "KOVAL_RATE_LIMIT",
+                    "KOVAL_QUEUE_CAPACITY",
+                    "KOVAL_PORT",
+                    "KOVAL_BCRYPT_COST",
+                ];
                 for (k, v) in env {
-                    collected_env.insert(k.clone(), v.clone());
+                    if blocklist.contains(&k.as_str()) {
+                        eprintln!("Warning: environment variable '{}' from koval.toml is blocked.", k);
+                    } else {
+                        collected_env.insert(k.clone(), v.clone());
+                    }
                 }
             }
             if let Some(ref features) = rule.features {
@@ -472,5 +486,25 @@ mod tests {
 
         let build = build_config(&legacy_hardware, &config);
         assert_eq!(build.features, vec!["avx2-ok".to_string()]);
+    }
+
+    #[test]
+    fn test_forge_env_blocklist_case_27() {
+        let hardware = get_fixture_hardware();
+        let config = KovalToml {
+            rules: vec![ForgeRule {
+                env: Some([
+                    ("SAFE_ENV_VAR".to_string(), "ok".to_string()),
+                    ("KOVAL_DB".to_string(), "/secret/path".to_string()),
+                    ("KOVAL_ADMIN_TOKEN".to_string(), "supersecret".to_string()),
+                ].into_iter().collect()),
+                ..Default::default()
+            }],
+        };
+
+        let build = build_config(&hardware, &config);
+        assert_eq!(build.env.get("SAFE_ENV_VAR").unwrap(), "ok");
+        assert!(build.env.get("KOVAL_DB").is_none());
+        assert!(build.env.get("KOVAL_ADMIN_TOKEN").is_none());
     }
 }

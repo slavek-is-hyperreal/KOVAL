@@ -37,9 +37,23 @@ impl From<BcryptError> for AuthError {
     }
 }
 
+fn get_bcrypt_cost() -> u32 {
+    let default_cost = if cfg!(test) { 4 } else { 12 };
+    match std::env::var("KOVAL_BCRYPT_COST") {
+        Ok(val) => match val.parse::<u32>() {
+            Ok(cost) if (4..=31).contains(&cost) => cost,
+            _ => {
+                eprintln!("Warning: Invalid KOVAL_BCRYPT_COST '{}'. Must be between 4 and 31. Falling back to default: {}.", val, default_cost);
+                default_cost
+            }
+        },
+        Err(_) => default_cost,
+    }
+}
+
 /// Hashes a plain text token using bcrypt
 pub fn hash_token(raw_token: &str) -> Result<String, BcryptError> {
-    hash(raw_token, 4) // Use a low round count (4) to keep tests fast inside Docker while remaining fully compliant
+    hash(raw_token, get_bcrypt_cost())
 }
 
 /// Authenticates a token and applies sliding window rate-limiting
@@ -139,5 +153,30 @@ mod tests {
         let later = now + chrono::Duration::seconds(61);
         let res_reset = authenticate_and_rate_limit(&conn, raw_token, later, 3);
         assert!(res_reset.is_ok());
+    }
+
+    #[test]
+    fn test_bcrypt_cost_env_var() {
+        std::env::remove_var("KOVAL_BCRYPT_COST");
+        let h1 = hash_token("test").unwrap();
+        let cost1 = h1.split('$').nth(2).unwrap().parse::<u32>().unwrap();
+        assert_eq!(cost1, 4);
+
+        std::env::set_var("KOVAL_BCRYPT_COST", "5");
+        let h2 = hash_token("test").unwrap();
+        let cost2 = h2.split('$').nth(2).unwrap().parse::<u32>().unwrap();
+        assert_eq!(cost2, 5);
+
+        std::env::set_var("KOVAL_BCRYPT_COST", "3");
+        let h3 = hash_token("test").unwrap();
+        let cost3 = h3.split('$').nth(2).unwrap().parse::<u32>().unwrap();
+        assert_eq!(cost3, 4);
+
+        std::env::set_var("KOVAL_BCRYPT_COST", "abc");
+        let h4 = hash_token("test").unwrap();
+        let cost4 = h4.split('$').nth(2).unwrap().parse::<u32>().unwrap();
+        assert_eq!(cost4, 4);
+
+        std::env::remove_var("KOVAL_BCRYPT_COST");
     }
 }

@@ -21,6 +21,41 @@ use crate::queue::JobQueue;
 use crate::routes::AppState;
 use crate::worker::BuildWorker;
 
+pub fn bootstrap_admin_token(conn: &rusqlite::Connection) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    let active_tokens = db::get_active_tokens(conn)?;
+    if active_tokens.is_empty() {
+        let (admin_token, is_generated) = match std::env::var("KOVAL_ADMIN_TOKEN") {
+            Ok(token) => (token, false),
+            Err(_) => (uuid::Uuid::new_v4().to_string(), true),
+        };
+        let hashed = auth::hash_token(&admin_token)?;
+        db::insert_token(
+            conn,
+            &hashed,
+            "Default Admin Token",
+            &chrono::Utc::now().to_rfc3339(),
+        )?;
+        
+        if is_generated {
+            eprintln!("=======================================================");
+            eprintln!("  WARNING: KOVAL_ADMIN_TOKEN is not set.");
+            eprintln!("  A random bootstrap admin token has been generated:");
+            eprintln!("  Bearer Token: {}", admin_token);
+            eprintln!("  Please configure a secure KOVAL_ADMIN_TOKEN environment variable");
+            eprintln!("  and rotate this token immediately in production.");
+            eprintln!("=======================================================");
+        } else {
+            println!("=======================================================");
+            println!("  BOOTSTRAPPED DEFAULT DEVELOPER ADMIN TOKEN FROM ENV:");
+            println!("  Bearer Token: {}", admin_token);
+            println!("=======================================================");
+        }
+        Ok(Some(admin_token))
+    } else {
+        Ok(None)
+    }
+}
+
 #[tokio::main]
 async fn main() {
     println!("Starting Koval Server...");
@@ -45,23 +80,7 @@ async fn main() {
     let conn = db::init_db(&db_path).expect("Failed to initialize database");
     
     // 3. Bootstrap default developer token if table is empty
-    let active_tokens = db::get_active_tokens(&conn).expect("Failed to check active tokens");
-    if active_tokens.is_empty() {
-        let default_admin_token = "koval_tkn_default_admin";
-        let hashed = auth::hash_token(default_admin_token).expect("Failed to hash bootstrap token");
-        db::insert_token(
-            &conn,
-            &hashed,
-            "Default Admin Token",
-            &chrono::Utc::now().to_rfc3339(),
-        )
-        .expect("Failed to bootstrap default admin token");
-        
-        println!("=======================================================");
-        println!("  BOOTSTRAPPED DEFAULT DEVELOPER ADMIN TOKEN:");
-        println!("  Bearer Token: {}", default_admin_token);
-        println!("=======================================================");
-    }
+    let _ = bootstrap_admin_token(&conn).expect("Failed to bootstrap default admin token");
 
     let shared_conn = Arc::new(Mutex::new(conn));
 
@@ -97,6 +116,7 @@ async fn main() {
         .route("/forge/install", post(routes::install::forge_install_handler))
         .route("/pgo/profiles/:instrument_job_id", post(routes::pgo::upload_profiles_handler))
         .route("/pgo/profiles/:instrument_job_id/merged.profdata", get(routes::pgo::get_merged_profile_handler))
+        .layer(axum::extract::DefaultBodyLimit::max(50 * 1024 * 1024))
         .with_state(state);
 
     // 7. Bind and run Axum server
@@ -144,6 +164,7 @@ mod tests {
             .route("/forge/install", post(routes::install::forge_install_handler))
             .route("/pgo/profiles/:instrument_job_id", post(routes::pgo::upload_profiles_handler))
             .route("/pgo/profiles/:instrument_job_id/merged.profdata", get(routes::pgo::get_merged_profile_handler))
+            .layer(axum::extract::DefaultBodyLimit::max(50 * 1024 * 1024))
             .with_state(state);
 
         (app, shared_conn, shared_queue, rx)
@@ -349,6 +370,62 @@ mod tests {
 
         let res_status = app.oneshot(req_status).await.unwrap();
         assert_eq!(res_status.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_integration_case_21_invalid_binary_name() {
+        let (app, _conn, _queue, _rx) = build_test_router();
+
+        let payload = r#"{
+            "project": "https://github.com/example/lib",
+            "git_ref": "v1.0",
+            "binary": "-invalid",
+            "hardware": {
+                "cpu": {"flags": ["avx2"], "cache_topology": "L1:32KB", "core_count": 4},
+                "memory": {"total_bytes": 8589934592, "available_bytes": 4294967296, "bandwidth_mbs": 12000.0},
+                "storage": {"io_uring": false, "o_direct": true, "read_speed_mbs": 450.0, "write_speed_mbs": 400.0},
+                "gpu": {"devices": []}
+            }
+        }"#;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/build")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::from(payload))
+            .unwrap();
+
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_integration_case_22_valid_binary_name() {
+        let (app, _conn, _queue, _rx) = build_test_router();
+
+        let payload = r#"{
+            "project": "https://github.com/example/lib",
+            "git_ref": "v1.0",
+            "binary": "valid-name-123",
+            "hardware": {
+                "cpu": {"flags": ["avx2"], "cache_topology": "L1:32KB", "core_count": 4},
+                "memory": {"total_bytes": 8589934592, "available_bytes": 4294967296, "bandwidth_mbs": 12000.0},
+                "storage": {"io_uring": false, "o_direct": true, "read_speed_mbs": 450.0, "write_speed_mbs": 400.0},
+                "gpu": {"devices": []}
+            }
+        }"#;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/build")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::from(payload))
+            .unwrap();
+
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::ACCEPTED);
     }
 
     #[tokio::test]
@@ -1092,5 +1169,149 @@ mod tests {
             .unwrap();
         let res = app.clone().oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_integration_case_23_invalid_project_url() {
+        let (app, conn_mutex, _queue, mut rx) = build_test_router();
+
+        let payload = r#"{
+            "project": "file:///etc/passwd",
+            "git_ref": "main",
+            "hardware": {
+                "cpu": {"flags": ["avx2"], "cache_topology": "L1:32KB", "core_count": 4},
+                "memory": {"total_bytes": 8589934592, "available_bytes": 4294967296, "bandwidth_mbs": 12000.0},
+                "storage": {"io_uring": false, "o_direct": true, "read_speed_mbs": 450.0, "write_speed_mbs": 400.0},
+                "gpu": {"devices": []}
+            }
+        }"#;
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/build")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::from(payload))
+            .unwrap();
+
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::ACCEPTED);
+
+        let body_bytes = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let body_json: Value = serde_json::from_slice(&body_bytes).unwrap();
+        let job_id = body_json["id"].as_str().unwrap();
+
+        let job = rx.recv().await.expect("Job should be queued");
+        assert_eq!(job.id, job_id);
+
+        let artifacts_dir = std::env::temp_dir();
+        let res_process = crate::worker::process_job(&conn_mutex, job, &artifacts_dir);
+        assert!(res_process.is_ok());
+
+        let conn = conn_mutex.lock().unwrap();
+        let job_status = db::get_job_status(&conn, job_id).unwrap().unwrap();
+        assert_eq!(job_status.status, "failed");
+        assert_eq!(job_status.error_msg.unwrap(), "Only https:// project URLs are permitted");
+    }
+
+    #[tokio::test]
+    async fn test_secure_default_token_generation_case_25() {
+        let conn = db::init_db(":memory:").unwrap();
+
+        std::env::set_var("KOVAL_ADMIN_TOKEN", "test-env-token-123");
+        let token_from_env = bootstrap_admin_token(&conn).unwrap().unwrap();
+        assert_eq!(token_from_env, "test-env-token-123");
+
+        let active_tokens = db::get_active_tokens(&conn).unwrap();
+        assert_eq!(active_tokens.len(), 1);
+        assert_eq!(active_tokens[0].name, "Default Admin Token");
+
+        let authenticated_token = auth::authenticate_and_rate_limit(
+            &conn,
+            "test-env-token-123",
+            chrono::Utc::now(),
+            100,
+        ).unwrap();
+        assert_eq!(authenticated_token.name, "Default Admin Token");
+
+        std::env::remove_var("KOVAL_ADMIN_TOKEN");
+        let conn2 = db::init_db(":memory:").unwrap();
+
+        let generated_token = bootstrap_admin_token(&conn2).unwrap().unwrap();
+        assert!(uuid::Uuid::parse_str(&generated_token).is_ok());
+
+        let authenticated_token2 = auth::authenticate_and_rate_limit(
+            &conn2,
+            &generated_token,
+            chrono::Utc::now(),
+            100,
+        ).unwrap();
+        assert_eq!(authenticated_token2.name, "Default Admin Token");
+    }
+
+    #[tokio::test]
+    async fn test_integration_pgo_upload_limits_case_31() {
+        let (app, conn_mutex, _queue, _rx) = build_test_router();
+
+        let job_id = "job-limit-123";
+        let hardware = schema::HardwareProfile { ..Default::default() };
+        {
+            let conn = conn_mutex.lock().unwrap();
+            db::insert_job(
+                &conn,
+                job_id,
+                1,
+                "https://github.com/example/pgotest",
+                "v1.0",
+                &hardware,
+                "2026-05-17T17:00:00Z",
+                "pgo_instrument",
+                None,
+            ).unwrap();
+            db::update_job_status(&conn, job_id, "done", None, None, None).unwrap();
+        }
+
+        let boundary = "------------------------1234567890";
+        let mut multipart_body = Vec::new();
+        for i in 1..=33 {
+            multipart_body.extend_from_slice(
+                format!(
+                    "--{boundary}\r\n\
+                     Content-Disposition: form-data; name=\"profile{i}\"; filename=\"test{i}.profraw\"\r\n\
+                     Content-Type: application/octet-stream\r\n\r\n\
+                     dummy content\r\n"
+                )
+                .as_bytes(),
+            );
+        }
+        multipart_body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+
+        let req = Request::builder()
+            .method("POST")
+            .uri(&format!("/pgo/profiles/{}", job_id))
+            .header(header::CONTENT_TYPE, format!("multipart/form-data; boundary={boundary}"))
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::from(multipart_body))
+            .unwrap();
+
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+        let large_body = vec![0u8; 51 * 1024 * 1024];
+        let req_large = Request::builder()
+            .method("POST")
+            .uri(&format!("/pgo/profiles/{}", job_id))
+            .header(header::CONTENT_TYPE, format!("multipart/form-data; boundary={boundary}"))
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::from(large_body))
+            .unwrap();
+
+        let res_large = app.oneshot(req_large).await.unwrap();
+        let status_large = res_large.status();
+        assert!(
+            status_large == StatusCode::BAD_REQUEST || status_large == StatusCode::PAYLOAD_TOO_LARGE,
+            "Expected BAD_REQUEST or PAYLOAD_TOO_LARGE, got {:?}",
+            status_large
+        );
     }
 }

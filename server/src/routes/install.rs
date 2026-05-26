@@ -22,6 +22,8 @@ pub struct ForgeInstallParams {
     pub project: String,
     #[serde(rename = "ref")]
     pub git_ref: String,
+    pub binary: Option<String>,
+    pub package: Option<String>,
 }
 
 pub async fn install_script_handler(
@@ -113,14 +115,26 @@ pub async fn forge_install_handler(
         }
     };
 
+    // 1.5. Validate binary and package names if provided
+    if let Some(ref b) = params.binary {
+        if !crate::routes::build::is_valid_cargo_name(b) {
+            return (StatusCode::BAD_REQUEST, "Invalid binary name").into_response();
+        }
+    }
+    if let Some(ref p) = params.package {
+        if !crate::routes::build::is_valid_cargo_name(p) {
+            return (StatusCode::BAD_REQUEST, "Invalid package name").into_response();
+        }
+    }
+
     // 2. Build Cache Lookup
     let hardware_json = serde_json::to_string(&hardware).unwrap_or_default();
     let cache_key = crate::cache::compute_cache_key(
         &hardware_json,
         &params.project,
         &params.git_ref,
-        None,
-        None,
+        params.binary.as_deref(),
+        params.package.as_deref(),
         None,
     );
 
@@ -164,8 +178,8 @@ pub async fn forge_install_handler(
         project: params.project.clone(),
         git_ref: params.git_ref.clone(),
         hardware,
-        binary: None,
-        package: None,
+        binary: params.binary.clone(),
+        package: params.package.clone(),
         target: None,
         job_type: "standard".to_string(),
         pgo_source_job_id: None,
