@@ -27,6 +27,12 @@ case "$ARCH" in
     aarch64)
         TARGET_ARCH="aarch64"
         ;;
+    i686)
+        TARGET_ARCH="i686"
+        ;;
+    armv6l)
+        TARGET_ARCH="armv6"
+        ;;
     *)
         echo "Error: Unsupported architecture: ${ARCH}" >&2
         exit 1

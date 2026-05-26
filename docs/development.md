@@ -296,6 +296,8 @@ the `400 Bad Request` validation path — no route changes are needed.
 | Target triple | Architecture | Use case | Linker package |
 |---|---|---|---|
 | `aarch64-unknown-linux-gnu` | ARM64 | Raspberry Pi 4, AWS Graviton, Apple Silicon servers | `gcc-aarch64-linux-gnu` |
-| `armv7-unknown-linux-gnueabihf` | ARM32 | Raspberry Pi OS 32-bit, embedded ARM | `gcc-arm-linux-gnueabihf` |
+| `armv7-unknown-linux-gnueabihf` | ARM32 (ARMv7) | Raspberry Pi OS 32-bit, embedded ARM | `gcc-arm-linux-gnueabihf` |
 | `x86_64-unknown-linux-musl` | x86_64 musl | Static binaries, Alpine containers | `musl-tools` |
+| `i686-unknown-linux-musl` | x86 (32-bit) musl | Old Intel CPUs, netbooks, legacy servers | `gcc-multilib` |
+| `arm-unknown-linux-gnueabihf` | ARM32 (ARMv6 hard float) | Raspberry Pi 1, Raspberry Pi Zero (ARMv6) | `gcc-arm-linux-gnueabihf` |
 | *(none)* | native | Build box architecture | *(no cross-linker needed)* |

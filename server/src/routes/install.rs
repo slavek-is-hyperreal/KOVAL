@@ -60,13 +60,17 @@ pub async fn install_script_handler(
     )
 }
 
+// WARNING: The static probe binaries embedded here (probe_i686 and probe_armv6) must be pre-compiled
+// and placed in server/src/assets/ before compiling the server crate, as include_bytes! is evaluated at compile time.
 pub async fn static_probe_handler(
     Path(arch): Path<String>,
 ) -> impl IntoResponse {
     let bytes: &'static [u8] = match arch.as_str() {
         "x86_64" => include_bytes!("../assets/probe_x86_64"),
         "aarch64" => include_bytes!("../assets/probe_aarch64"),
-        _ => return (StatusCode::NOT_FOUND, "Unsupported architecture").into_response(),
+        "i686" => include_bytes!("../assets/probe_i686"),
+        "armv6" => include_bytes!("../assets/probe_armv6"),
+        _ => return (StatusCode::BAD_REQUEST, "Unsupported architecture").into_response(),
     };
 
     (
@@ -212,5 +216,138 @@ pub async fn forge_install_handler(
         Err(QueueError::SendError(e)) => {
             (StatusCode::INTERNAL_SERVER_ERROR, format!("Job dispatch failed: {}", e)).into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        body::Body,
+        http::{header, Request, StatusCode},
+        routing::{get, post},
+        Router,
+    };
+    use tower::util::ServiceExt;
+    use std::sync::{Arc, Mutex};
+    use std::path::PathBuf;
+    use crate::db;
+    use crate::auth;
+    use crate::queue::JobQueue;
+    use crate::routes::AppState;
+
+    fn build_test_router() -> (Router, tokio::sync::mpsc::Receiver<crate::queue::Job>) {
+        let conn = db::init_db(":memory:").unwrap();
+        
+        // Setup a test token
+        let token_hash = auth::hash_token("test_bearer").unwrap();
+        db::insert_token(&conn, &token_hash, "Test Client", &chrono::Utc::now().to_rfc3339()).unwrap();
+
+        let shared_conn = Arc::new(Mutex::new(conn));
+        let (queue, rx) = JobQueue::new(5);
+        let shared_queue = Arc::new(queue);
+        let state = AppState {
+            conn: shared_conn.clone(),
+            queue: shared_queue.clone(),
+            artifacts_dir: PathBuf::from("/tmp/artifacts"),
+            rate_limit_limit: 10,
+        };
+
+        let router = Router::new()
+            .route("/build", post(crate::routes::build::build_handler))
+            .route("/probe/static/:arch", get(super::static_probe_handler))
+            .with_state(state);
+
+        (router, rx)
+    }
+
+    #[tokio::test]
+    async fn test_get_static_probe_i686() {
+        let (app, _rx) = build_test_router();
+        let req = Request::builder()
+            .method("GET")
+            .uri("/probe/static/i686")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let headers = res.headers();
+        assert_eq!(headers.get(header::CONTENT_TYPE).unwrap(), "application/octet-stream");
+    }
+
+    #[tokio::test]
+    async fn test_get_static_probe_armv6() {
+        let (app, _rx) = build_test_router();
+        let req = Request::builder()
+            .method("GET")
+            .uri("/probe/static/armv6")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let headers = res.headers();
+        assert_eq!(headers.get(header::CONTENT_TYPE).unwrap(), "application/octet-stream");
+    }
+
+    #[tokio::test]
+    async fn test_get_static_probe_mips_fails() {
+        let (app, _rx) = build_test_router();
+        let req = Request::builder()
+            .method("GET")
+            .uri("/probe/static/mips")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_build_target_i686() {
+        let (app, _rx) = build_test_router();
+        let payload = r#"{
+            "project": "https://github.com/example/target_i686",
+            "git_ref": "v1.0",
+            "target": "i686-unknown-linux-musl",
+            "hardware": {
+                "cpu": {"flags": ["avx2"], "cache_topology": "L1:32KB", "core_count": 4},
+                "memory": {"total_bytes": 8589934592, "available_bytes": 4294967296, "bandwidth_mbs": 12000.0},
+                "storage": {"io_uring": false, "o_direct": true, "read_speed_mbs": 450.0, "write_speed_mbs": 400.0},
+                "gpu": {"devices": []}
+            }
+        }"#;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/build")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::from(payload))
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::ACCEPTED);
+    }
+
+    #[tokio::test]
+    async fn test_build_target_armv6() {
+        let (app, _rx) = build_test_router();
+        let payload = r#"{
+            "project": "https://github.com/example/target_armv6",
+            "git_ref": "v1.0",
+            "target": "arm-unknown-linux-gnueabihf",
+            "hardware": {
+                "cpu": {"flags": ["avx2"], "cache_topology": "L1:32KB", "core_count": 4},
+                "memory": {"total_bytes": 8589934592, "available_bytes": 4294967296, "bandwidth_mbs": 12000.0},
+                "storage": {"io_uring": false, "o_direct": true, "read_speed_mbs": 450.0, "write_speed_mbs": 400.0},
+                "gpu": {"devices": []}
+            }
+        }"#;
+        let req = Request::builder()
+            .method("POST")
+            .uri("/build")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, "Bearer test_bearer")
+            .body(Body::from(payload))
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::ACCEPTED);
     }
 }

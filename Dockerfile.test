@@ -14,10 +14,15 @@ RUN apt-get update && apt-get install -y \
     llvm \
     && rm -rf /var/lib/apt/lists/*
 
+RUN printf '#!/bin/sh\nexec gcc -m32 "$@"\n' > /usr/bin/i686-linux-musl-gcc \
+    && chmod +x /usr/bin/i686-linux-musl-gcc
+
 # Add rustup targets for cross-compilation
 RUN rustup target add aarch64-unknown-linux-gnu \
     && rustup target add armv7-unknown-linux-gnueabihf \
-    && rustup target add x86_64-unknown-linux-musl
+    && rustup target add x86_64-unknown-linux-musl \
+    && rustup target add i686-unknown-linux-musl \
+    && rustup target add arm-unknown-linux-gnueabihf
 
 WORKDIR /koval
 COPY . .
